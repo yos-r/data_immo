@@ -26,13 +26,87 @@ from model_functions import (
     analyze_missing_data
 )
 
+# Configuration de la page
 st.set_page_config(
     page_title="Analyse Immobilière ML",
     page_icon="🏠",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-st.title("Analyse du Marché Immobilier Tunisien avec ML")
+# CSS personnalisé pour améliorer l'apparence
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        color: #1E3A8A;
+        margin-bottom: 1rem;
+    }
+    .sub-header {
+        font-size: 1.8rem;
+        color: #2563EB;
+        margin-top: 2rem;
+        margin-bottom: 1rem;
+    }
+    .section-header {
+        font-size: 1.5rem;
+        color: #3B82F6;
+        margin-top: 1.5rem;
+        margin-bottom: 0.8rem;
+    }
+    .highlight {
+        background-color: #EFF6FF;
+        padding: 20px;
+        border-radius: 5px;
+        border-left: 5px solid #3B82F6;
+        margin-bottom: 20px;
+    }
+    .info-box {
+        background-color: #DBEAFE;
+        padding: 15px;
+        border-radius: 5px;
+        margin-bottom: 15px;
+    }
+    .stat-card {
+        background-color: #F8FAFC;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        margin-bottom: 15px;
+        text-align: center;
+    }
+    .footer {
+        margin-top: 50px;
+        padding-top: 20px;
+        border-top: 1px solid #E5E7EB;
+        text-align: center;
+        font-size: 0.9rem;
+        color: #6B7280;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Header de l'application
+st.title("🏠 Analyse du Marché Immobilier Tunisien")
+
+# Introduction et contexte
+with st.expander("📌 À propos de cette application", expanded=True):
+    st.markdown("""
+    <div class="highlight">
+    <h4>Contexte</h4>
+    <p>Cette application vous permet d'analyser en profondeur le marché immobilier tunisien à travers des données collectées depuis des sites de franchises immobilières  (Century 21, REMAX, Tecnocasa et Newkey). Que vous soyez un investisseur, un agent immobilier, ou simplement à la recherche d'un bien, cet outil vous fournit des insights précieux sur les tendances du marché.</p>
+    
+    <h4>Fonctionnalités</h4>
+    <ul>
+        <li><strong>Analyse exploratoire</strong> : Visualisez les distributions des prix, surfaces, et autres caractéristiques des biens</li>
+        <li><strong>Traitement des données</strong> : Nettoyez et imputez les valeurs manquantes pour une analyse plus précise</li>
+        <li><strong>Modélisation prédictive</strong> : Utilisez des algorithmes d'apprentissage automatique pour prédire les prix et identifier les facteurs déterminants</li>
+        <li><strong>Segmentation géographique</strong> : Analysez les spécificités du marché par ville et quartier</li>
+    </ul>
+    </div>
+    """, unsafe_allow_html=True)
+uploaded_file = st.file_uploader("Télécharger un fichier CSV", type=['csv'])
+
 
 # Fonction pour nettoyer et préparer les données
 def preprocess_data(df):
@@ -719,7 +793,6 @@ if 'df_imputed' not in st.session_state:
     st.session_state['df_imputed'] = None
 
 # Téléchargement du fichier
-uploaded_file = st.file_uploader("Télécharger un fichier CSV", type=['csv'])
 
 if uploaded_file is not None:
     try:
