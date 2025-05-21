@@ -2,14 +2,37 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
+import matplotlib.pyplot as plt
+import seaborn as sns
+import time
+
+# Importer les fonctions depuis le fichier model_functions.py
+from model_functions import (
+    # Fonctions d'apprentissage supervisé
+    prepare_data_for_regression,
+    regression_par_segment,
+    random_forest_par_segment,
+    xgboost_simple,
+    comparer_modeles,
+    
+    # Fonctions d'imputation
+    impute_missing_prices,
+    impute_condition_simple,
+    impute_finishing_simple,
+    impute_property_year_age,
+    impute_binary_amenities,
+    simple_impute_rooms,
+    analyze_missing_data
+)
 
 st.set_page_config(
-    page_title="Analyse Immobilière",
+    page_title="Analyse Immobilière ML",
     page_icon="🏠",
     layout="wide"
 )
 
-st.title("Analyse du Marché Immobilier Tunisien")
+st.title("Analyse du Marché Immobilier Tunisien avec ML")
 
 # Fonction pour nettoyer et préparer les données
 def preprocess_data(df):
@@ -36,64 +59,691 @@ def preprocess_data(df):
     # Standardiser la casse pour les colonnes catégorielles
     categorical_columns = ['property_type', 'transaction', 'city', 'state', 'neighborhood', 'finishing', 'condition']
     for col in categorical_columns:
-        if col in df.columns:
+        if col in df.columns and df[col].dtype == 'object':
             # Convertir tout en minuscules pour standardiser
-            df[col] = df[col].str.lower() if df[col].dtype == 'object' else df[col]
+            df[col] = df[col].str.lower()
     
     return df
 
-# Option pour uploader un fichier
+# Fonction pour générer les visualisations basiques
+def basic_visualizations(df):
+    # Visualisation par ville
+    if 'city' in df.columns:
+        st.subheader("Nombre de propriétés par ville")
+        city_counts = df['city'].value_counts().reset_index()
+        city_counts.columns = ['ville', 'nombre']
+        city_counts['ville'] = city_counts['ville'].str.title()
+        
+        fig = px.bar(city_counts, x='ville', y='nombre', 
+                   title="Nombre de propriétés par ville")
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Prix moyen par type de propriété
+    if 'property_type' in df.columns and 'price' in df.columns:
+        valid_price_df = df.dropna(subset=['price'])
+        if not valid_price_df.empty:
+            st.subheader("Prix moyen par type de propriété")
+            price_by_type = valid_price_df.groupby('property_type')['price'].mean().reset_index()
+            price_by_type.columns = ['type', 'prix_moyen']
+            price_by_type['type'] = price_by_type['type'].str.capitalize()
+            
+            fig = px.bar(price_by_type, x='type', y='prix_moyen', 
+                       title="Prix moyen par type de propriété",
+                       labels={'prix_moyen': 'Prix moyen (TND)', 'type': 'Type de bien'})
+            st.plotly_chart(fig, use_container_width=True)
+    
+    # Relation taille vs prix
+    if 'size' in df.columns and 'price' in df.columns:
+        valid_data = df.dropna(subset=['size', 'price'])
+        if len(valid_data) > 5:
+            st.subheader("Relation entre taille et prix")
+            
+            if 'property_type' in valid_data.columns:
+                plot_data = valid_data.copy()
+                plot_data['property_type_display'] = plot_data['property_type'].str.capitalize()
+                
+                fig = px.scatter(plot_data, x='size', y='price', 
+                               color='property_type_display',
+                               title="Relation entre taille et prix",
+                               labels={'size': 'Surface (m²)', 'price': 'Prix (TND)', 
+                                     'property_type_display': 'Type de bien'})
+            else:
+                fig = px.scatter(valid_data, x='size', y='price', 
+                               title="Relation entre taille et prix",
+                               labels={'size': 'Surface (m²)', 'price': 'Prix (TND)'})
+            
+            st.plotly_chart(fig, use_container_width=True)
+
+# Nouvelles visualisations
+def advanced_visualizations(df):
+    if df is None or df.empty:
+        st.warning("Aucune donnée disponible pour les visualisations avancées.")
+        return
+        
+    col1, col2 = st.columns(2)
+    
+    # Distribution des conditions
+    with col1:
+        if 'condition' in df.columns and not df['condition'].isna().all():
+            st.subheader("Distribution des états de propriété")
+            condition_counts = df['condition'].value_counts().reset_index()
+            condition_counts.columns = ['état', 'nombre']
+            condition_counts['état'] = condition_counts['état'].str.capitalize()
+            
+            fig = px.pie(condition_counts, values='nombre', names='état', 
+                      title="Distribution des états de propriété",
+                      color_discrete_sequence=px.colors.qualitative.Pastel)
+            fig.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig, use_container_width=True)
+    
+    # Distribution des finitions
+    with col2:
+        if 'finishing' in df.columns and not df['finishing'].isna().all():
+            st.subheader("Niveau de finition des propriétés")
+            finishing_counts = df['finishing'].value_counts().reset_index()
+            finishing_counts.columns = ['finition', 'nombre']
+            finishing_counts['finition'] = finishing_counts['finition'].str.capitalize()
+            
+            fig = px.pie(finishing_counts, values='nombre', names='finition', 
+                      title="Niveau de finition des propriétés",
+                      color_discrete_sequence=px.colors.qualitative.Bold)
+            fig.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig, use_container_width=True)
+    
+    # Visualisation des transactions par quartier
+    if 'transaction' in df.columns and 'neighborhood' in df.columns and not df['neighborhood'].isna().all():
+        st.subheader("Types de transaction par quartier")
+        try:
+            transaction_by_neighborhood = pd.crosstab(df['neighborhood'], df['transaction'])
+            transaction_by_neighborhood = transaction_by_neighborhood.reset_index()
+            transaction_by_neighborhood_melted = pd.melt(
+                transaction_by_neighborhood, 
+                id_vars=['neighborhood'], 
+                var_name='transaction', 
+                value_name='count'
+            )
+            transaction_by_neighborhood_melted['neighborhood'] = transaction_by_neighborhood_melted['neighborhood'].str.title()
+            transaction_by_neighborhood_melted['transaction'] = transaction_by_neighborhood_melted['transaction'].str.capitalize()
+            
+            # Limiter aux 15 quartiers les plus fréquents pour lisibilité
+            top_neighborhoods = df['neighborhood'].value_counts().nlargest(15).index
+            filtered_data = transaction_by_neighborhood_melted[
+                transaction_by_neighborhood_melted['neighborhood'].str.lower().isin(top_neighborhoods)
+            ]
+            
+            if not filtered_data.empty:
+                fig = px.bar(filtered_data, x='neighborhood', y='count', color='transaction',
+                           title="Types de transaction par quartier (top 15)",
+                           labels={'count': 'Nombre', 'neighborhood': 'Quartier', 'transaction': 'Type de transaction'},
+                           barmode='stack')
+                fig.update_layout(xaxis={'categoryorder': 'total descending'})
+                st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Impossible de générer la visualisation des transactions par quartier: {e}")
+    
+    # Matrice de corrélation
+    numeric_df = df.select_dtypes(include=['number'])
+    if numeric_df.shape[1] > 2:
+        st.subheader("Matrice de corrélation")
+        
+        # Sélectionner seulement les colonnes numériques et supprimer les colonnes avec trop de NA
+        cols_to_keep = numeric_df.columns[numeric_df.isnull().mean() < 0.5]
+        if len(cols_to_keep) >= 2:  # Besoin d'au moins 2 colonnes pour une corrélation
+            try:
+                corr_df = numeric_df[cols_to_keep].corr()
+                
+                fig = px.imshow(corr_df, 
+                               text_auto=True, 
+                               aspect="auto",
+                               color_continuous_scale='RdBu_r',
+                               title="Corrélation entre les variables")
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.warning(f"Impossible de générer la matrice de corrélation: {e}")
+    
+    # Distribution des prix par type de propriété
+    if 'price' in df.columns and 'property_type' in df.columns:
+        valid_data = df.dropna(subset=['price', 'property_type'])
+        if len(valid_data) > 5:
+            st.subheader("Distribution des prix par type de propriété")
+            
+            fig = px.box(valid_data, x='property_type', y='price',
+                       labels={'property_type': 'Type de propriété', 'price': 'Prix (TND)'},
+                       title="Distribution des prix par type de propriété",
+                       category_orders={"property_type": sorted(valid_data['property_type'].unique())})
+            
+            fig.update_xaxes(tickangle=45)
+            st.plotly_chart(fig, use_container_width=True)
+
+# Nouvelle section pour les imputations de données
+def imputation_section(df):
+    st.header("Imputation des données manquantes")
+    
+    if df is None or df.empty:
+        st.error("Aucune donnée disponible pour l'imputation.")
+        return df
+    
+    # Création de l'interface d'imputation
+    st.write("Cette section vous permet de compléter les valeurs manquantes dans votre jeu de données.")
+    
+    try:
+        # Analyser les données manquantes
+        missing_data_df = analyze_missing_data(df)
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.subheader("État des valeurs manquantes")
+            st.dataframe(missing_data_df)
+        
+        with col2:
+            # Graphique des valeurs manquantes
+            missing_cols = missing_data_df[missing_data_df['Valeurs NA'] > 0]
+            if not missing_cols.empty:
+                fig = px.bar(
+                    missing_cols.reset_index(), 
+                    x='index', 
+                    y='Pourcentage NA (%)',
+                    title="Pourcentage de valeurs manquantes par colonne",
+                    labels={'index': 'Colonne', 'Pourcentage NA (%)': '% manquant'}
+                )
+                fig.update_layout(xaxis={'categoryorder': 'total descending'})
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.success("👍 Aucune valeur manquante dans vos données!")
+        
+        # Sélection des colonnes à imputer
+        st.subheader("Choisir les colonnes à imputer")
+        
+        # Organisation par catégories
+        price_cols = st.multiselect(
+            "Colonnes de prix",
+            [col for col in df.columns if col in ['price', 'price_ttc', 'listing_price']],
+            [col for col in df.columns if col in ['price', 'price_ttc', 'listing_price'] and df[col].isna().sum() > 0]
+        )
+        
+        condition_finishing_cols = st.multiselect(
+            "Qualité et finition",
+            [col for col in df.columns if col in ['condition', 'finishing']],
+            [col for col in df.columns if col in ['condition', 'finishing'] and df[col].isna().sum() > 0]
+        )
+        
+        age_year_cols = st.multiselect(
+            "Âge et année de construction",
+            [col for col in df.columns if col in ['age', 'construction_year']],
+            [col for col in df.columns if col in ['age', 'construction_year'] and df[col].isna().sum() > 0]
+        )
+        
+        room_cols = st.multiselect(
+            "Pièces, chambres, salles de bain, etc.",
+            [col for col in df.columns if col in ['rooms', 'bedrooms', 'bathrooms', 'parkings']],
+            [col for col in df.columns if col in ['rooms', 'bedrooms', 'bathrooms', 'parkings'] and df[col].isna().sum() > 0]
+        )
+        
+        binary_cols = st.multiselect(
+            "Équipements (variables binaires)",
+            [col for col in df.columns if df[col].nunique() <= 2 and col not in ['transaction', 'city', 'property_type', 'neighborhood']],
+            [col for col in df.columns if df[col].nunique() <= 2 and df[col].isna().sum() > 0 and col not in ['transaction', 'city', 'property_type', 'neighborhood']]
+        )
+        
+        # Bouton pour lancer l'imputation
+        impute_button = st.button("Imputer les valeurs manquantes", type="primary")
+        
+        if impute_button:
+            if df is None or df.empty:
+                st.error("Aucune donnée disponible pour l'imputation.")
+                return df
+                
+            # Créer une copie pour l'imputation
+            try:
+                df_imputed = df.copy()
+                progress_placeholder = st.empty()
+                
+                with st.spinner("Imputation en cours..."):
+                    # Imputation progressive avec barre de progression
+                    progress_bar = st.progress(0)
+                    
+                    # 1. Imputation des prix
+                    if price_cols:
+                        progress_placeholder.write("Imputation des prix...")
+                        try:
+                            df_imputed = impute_missing_prices(df_imputed)
+                            progress_bar.progress(20)
+                            time.sleep(0.5)  # Pour une meilleure expérience utilisateur
+                        except Exception as e:
+                            st.error(f"Erreur lors de l'imputation des prix: {e}")
+                    
+                    # 2. Imputation de la condition
+                    if 'condition' in condition_finishing_cols:
+                        progress_placeholder.write("Imputation de la condition...")
+                        try:
+                            df_imputed = impute_condition_simple(df_imputed)
+                            progress_bar.progress(40)
+                            time.sleep(0.5)
+                        except Exception as e:
+                            st.error(f"Erreur lors de l'imputation de la condition: {e}")
+                    
+                    # 3. Imputation de la finition
+                    if 'finishing' in condition_finishing_cols:
+                        progress_placeholder.write("Imputation du niveau de finition...")
+                        try:
+                            df_imputed = impute_finishing_simple(df_imputed)
+                            progress_bar.progress(60)
+                            time.sleep(0.5)
+                        except Exception as e:
+                            st.error(f"Erreur lors de l'imputation de la finition: {e}")
+                    
+                    # 4. Imputation de l'âge et année de construction
+                    if age_year_cols:
+                        progress_placeholder.write("Imputation de l'âge et année de construction...")
+                        try:
+                            df_imputed = impute_property_year_age(
+                                df_imputed, 
+                                impute_year='construction_year' in age_year_cols, 
+                                impute_age='age' in age_year_cols
+                            )
+                            progress_bar.progress(75)
+                            time.sleep(0.5)
+                        except Exception as e:
+                            st.error(f"Erreur lors de l'imputation de l'âge/année: {e}")
+                    
+                    # 5. Imputation des caractéristiques binaires
+                    if binary_cols:
+                        progress_placeholder.write("Imputation des équipements...")
+                        try:
+                            df_imputed = impute_binary_amenities(df_imputed, binary_columns=binary_cols)
+                            progress_bar.progress(85)
+                            time.sleep(0.5)
+                        except Exception as e:
+                            st.error(f"Erreur lors de l'imputation des équipements: {e}")
+                    
+                    # 6. Imputation des pièces et caractéristiques
+                    for room_col in room_cols:
+                        progress_placeholder.write(f"Imputation de {room_col}...")
+                        try:
+                            df_imputed = simple_impute_rooms(df_imputed, rooms_col=room_col)
+                            time.sleep(0.3)
+                        except Exception as e:
+                            st.error(f"Erreur lors de l'imputation de {room_col}: {e}")
+                    
+                    progress_bar.progress(100)
+                    progress_placeholder.empty()
+                
+                # Comparer l'avant/après
+                st.subheader("Résultats de l'imputation")
+                
+                col1, col2 = st.columns(2)
+                
+                # Analyse des valeurs manquantes avant
+                with col1:
+                    st.write("Avant imputation")
+                    missing_before = analyze_missing_data(df)
+                    st.dataframe(missing_before)
+                    
+                    # Pourcentage global des données manquantes avant
+                    total_elements = df.shape[0] * df.shape[1]
+                    total_missing = df.isna().sum().sum()
+                    pct_missing_before = (total_missing / total_elements) * 100
+                    
+                    st.metric(
+                        "Pourcentage global de données manquantes",
+                        f"{pct_missing_before:.2f}%"
+                    )
+                
+                # Analyse des valeurs manquantes après
+                with col2:
+                    st.write("Après imputation")
+                    missing_after = analyze_missing_data(df_imputed)
+                    st.dataframe(missing_after)
+                    
+                    # Pourcentage global des données manquantes après
+                    total_missing_after = df_imputed.isna().sum().sum()
+                    pct_missing_after = (total_missing_after / total_elements) * 100
+                    
+                    st.metric(
+                        "Pourcentage global de données manquantes",
+                        f"{pct_missing_after:.2f}%",
+                        f"-{pct_missing_before - pct_missing_after:.2f}%"
+                    )
+                
+                # Visualisation de l'impact de l'imputation
+                st.subheader("Visualisation de l'impact de l'imputation")
+                
+                # Sélectionnez une colonne pour visualiser l'impact de l'imputation
+                all_imputed_cols = price_cols + condition_finishing_cols + age_year_cols + room_cols + binary_cols
+                
+                if all_imputed_cols:
+                    vis_col = st.selectbox(
+                        "Sélectionner une colonne pour visualiser l'impact de l'imputation",
+                        all_imputed_cols
+                    )
+                    
+                    if vis_col in df_imputed.columns:
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.write(f"Distribution de {vis_col} avant imputation")
+                            
+                            if pd.api.types.is_numeric_dtype(df[vis_col]):
+                                # Histogramme pour les données numériques
+                                fig = px.histogram(
+                                    df.dropna(subset=[vis_col]), 
+                                    x=vis_col,
+                                    title=f"Distribution de {vis_col} avant imputation",
+                                    nbins=30,
+                                    opacity=0.7
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
+                            else:
+                                # Barres pour les données catégorielles
+                                value_counts = df[vis_col].value_counts().reset_index()
+                                value_counts.columns = ['valeur', 'nombre']
+                                
+                                fig = px.bar(
+                                    value_counts,
+                                    x='valeur',
+                                    y='nombre',
+                                    title=f"Distribution de {vis_col} avant imputation"
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
+                        
+                        with col2:
+                            st.write(f"Distribution de {vis_col} après imputation")
+                            
+                            if pd.api.types.is_numeric_dtype(df_imputed[vis_col]):
+                                # Histogramme pour les données numériques
+                                fig = px.histogram(
+                                    df_imputed, 
+                                    x=vis_col,
+                                    title=f"Distribution de {vis_col} après imputation",
+                                    nbins=30,
+                                    opacity=0.7
+                                )
+                                # Ajouter une ligne pour marquer les valeurs imputées
+                                orig_values = df[~df[vis_col].isna()][vis_col]
+                                fig.add_traces(
+                                    px.histogram(
+                                        orig_values, 
+                                        x=orig_values,
+                                        nbins=30,
+                                        opacity=0.7
+                                    ).data
+                                )
+                                fig.data[0].marker.color = 'blue'  # Toutes les valeurs
+                                fig.data[1].marker.color = 'lightgreen'  # Valeurs originales
+                                fig.data[0].name = 'Toutes les valeurs (incluant imputées)'
+                                fig.data[1].name = 'Valeurs originales uniquement'
+                                fig.update_layout(barmode='overlay', legend=dict(orientation='h'))
+                                
+                                st.plotly_chart(fig, use_container_width=True)
+                            else:
+                                # Barres pour les données catégorielles
+                                value_counts = df_imputed[vis_col].value_counts().reset_index()
+                                value_counts.columns = ['valeur', 'nombre']
+                                
+                                fig = px.bar(
+                                    value_counts,
+                                    x='valeur',
+                                    y='nombre',
+                                    title=f"Distribution de {vis_col} après imputation"
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
+                
+                # Option pour continuer avec les données imputées
+                if st.button("Utiliser les données imputées pour la suite de l'analyse"):
+                    st.session_state['df_imputed'] = df_imputed
+                    st.success("✅ Les données imputées sont maintenant utilisées pour l'analyse!")
+                    st.experimental_rerun()  # Réexécuter l'application pour utiliser les données imputées
+                    
+                return df_imputed  # Retourner les données imputées
+                
+            except Exception as e:
+                st.error(f"Erreur lors de l'imputation: {e}")
+                st.info("Conseil: Vérifiez les données et essayez à nouveau.")
+                return df
+    except Exception as e:
+        st.error(f"Erreur lors de l'analyse des données manquantes: {e}")
+        return df
+        
+    return df
+
+# Nouvelle section pour l'apprentissage supervisé
+def supervised_learning_section(df, filtered_df):
+    st.header("Modèles d'Apprentissage Supervisé")
+    
+    if df is None or filtered_df is None or df.empty or filtered_df.empty:
+        st.error("Aucune donnée disponible pour l'apprentissage supervisé.")
+        return
+    
+    # Préparer les données pour la régression
+    with st.spinner("Préparation des données pour l'apprentissage..."):
+        try:
+            df_prep = prepare_data_for_regression(filtered_df)
+            st.success("Données préparées pour l'apprentissage supervisé !")
+        except Exception as e:
+            st.error(f"Erreur lors de la préparation des données : {e}")
+            return
+    
+    # Paramètres pour les modèles
+    st.subheader("Paramètres du modèle")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if 'city' in filtered_df.columns:
+            city_options = ["Toutes"] + sorted(filtered_df['city'].dropna().unique().tolist())
+            selected_city = st.selectbox("Ville pour le modèle", city_options)
+            selected_city = None if selected_city == "Toutes" else selected_city
+        else:
+            selected_city = None
+            st.write("Information sur la ville non disponible")
+    
+    with col2:
+        if 'property_type' in filtered_df.columns:
+            property_options = ["Tous"] + sorted(filtered_df['property_type'].dropna().unique().tolist())
+            selected_property = st.selectbox("Type de propriété pour le modèle", property_options)
+            selected_property = None if selected_property == "Tous" else selected_property
+        else:
+            selected_property = None
+            st.write("Information sur le type de propriété non disponible")
+    
+    with col3:
+        if 'transaction' in filtered_df.columns:
+            transaction_options = ["Toutes"] + sorted(filtered_df['transaction'].dropna().unique().tolist())
+            selected_transaction = st.selectbox("Type de transaction pour le modèle", transaction_options)
+            selected_transaction = None if selected_transaction == "Toutes" else selected_transaction
+        else:
+            selected_transaction = None
+            st.write("Information sur le type de transaction non disponible")
+    
+    # Sélection du modèle
+    model_type = st.selectbox(
+        "Sélectionner le modèle",
+        ["Comparaison de modèles", "Régression Linéaire", "Random Forest", "XGBoost"]
+    )
+    
+    # Bouton pour lancer l'entraînement
+    if st.button("Entraîner le modèle"):
+        with st.spinner("Entraînement du modèle en cours..."):
+            # Vérifier qu'il y a assez de données
+            if len(df_prep) < 10:
+                st.error("Pas assez de données pour l'entraînement du modèle. Veuillez élargir les critères de sélection.")
+            else:
+                try:
+                    # Créer un conteneur pour les résultats
+                    results_container = st.container()
+                    
+                    with results_container:
+                        st.subheader(f"Résultats pour {model_type}")
+                        
+                        # Exécuter le modèle sélectionné
+                        if model_type == "Comparaison de modèles":
+                            comparison = comparer_modeles(
+                                df_prep, 
+                                city=selected_city, 
+                                property_type=selected_property, 
+                                transaction=selected_transaction
+                            )
+                            st.dataframe(comparison)
+                            
+                            try:
+                                # Convertir les figures Matplotlib en Plotly pour Streamlit
+                                st.pyplot(plt.gcf())  # Récupère la figure actuelle (courante)
+                            except Exception as e:
+                                st.warning(f"Impossible d'afficher le graphique: {e}")
+                        
+                        elif model_type == "Régression Linéaire":
+                            model, importance, metrics = regression_par_segment(
+                                df_prep, 
+                                city=selected_city, 
+                                property_type=selected_property, 
+                                transaction=selected_transaction
+                            )
+                            
+                            # Afficher les métriques
+                            st.write(f"R² (test): {metrics['test_r2']:.4f}")
+                            st.write(f"RMSE (test): {metrics['test_rmse']:.2f}")
+                            st.write(f"MAE (test): {metrics['test_mae']:.2f}")
+                            
+                            # Afficher l'importance des caractéristiques
+                            st.subheader("Importance des caractéristiques")
+                            
+                            # Créer un graphique Plotly pour l'importance des caractéristiques
+                            top_features = importance.head(10)
+                            fig = px.bar(
+                                top_features,
+                                x='Coefficient',
+                                y='Caractéristique',
+                                orientation='h',
+                                title="Top 10 des caractéristiques les plus importantes",
+                                color='Coefficient',
+                                color_continuous_scale=px.colors.diverging.RdBu,
+                                color_continuous_midpoint=0
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            try:
+                                # Convertir les figures Matplotlib en Plotly pour Streamlit
+                                st.pyplot(plt.gcf())
+                            except Exception as e:
+                                st.warning(f"Impossible d'afficher le graphique: {e}")
+                        
+                        elif model_type == "Random Forest":
+                            model, importance, metrics = random_forest_par_segment(
+                                df_prep, 
+                                city=selected_city, 
+                                property_type=selected_property, 
+                                transaction=selected_transaction
+                            )
+                            
+                            # Afficher les métriques
+                            st.write(f"R² (test): {metrics['test_r2']:.4f}")
+                            st.write(f"RMSE (test): {metrics['test_rmse']:.2f}")
+                            st.write(f"MAE (test): {metrics['test_mae']:.2f}")
+                            
+                            # Afficher l'importance des caractéristiques
+                            st.subheader("Importance des caractéristiques")
+                            
+                            # Créer un graphique Plotly pour l'importance des caractéristiques
+                            top_features = importance.head(10)
+                            fig = px.bar(
+                                top_features,
+                                x='Importance',
+                                y='Caractéristique',
+                                orientation='h',
+                                title="Top 10 des caractéristiques les plus importantes",
+                                color='Importance',
+                                color_continuous_scale='Viridis'
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            try:
+                                # Convertir les figures Matplotlib en Plotly pour Streamlit
+                                st.pyplot(plt.gcf())
+                            except Exception as e:
+                                st.warning(f"Impossible d'afficher le graphique: {e}")
+                        
+                        elif model_type == "XGBoost":
+                            model, importance, test_r2 = xgboost_simple(
+                                df_prep, 
+                                city=selected_city, 
+                                property_type=selected_property, 
+                                transaction=selected_transaction
+                            )
+                            
+                            # Afficher les métriques
+                            st.write(f"R² (test): {test_r2:.4f}")
+                            
+                            # Afficher l'importance des caractéristiques
+                            st.subheader("Importance des caractéristiques")
+                            
+                            # Créer un graphique Plotly pour l'importance des caractéristiques
+                            top_features = importance.head(10)
+                            fig = px.bar(
+                                top_features,
+                                x='Importance',
+                                y='Caractéristique',
+                                orientation='h',
+                                title="Top 10 des caractéristiques les plus importantes",
+                                color='Importance',
+                                color_continuous_scale='Viridis'
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            try:
+                                # Convertir les figures Matplotlib en Plotly pour Streamlit
+                                st.pyplot(plt.gcf())
+                            except Exception as e:
+                                st.warning(f"Impossible d'afficher le graphique: {e}")
+                            
+                except Exception as e:
+                    st.error(f"Une erreur s'est produite lors de l'entraînement du modèle: {e}")
+
+# Application principale
+# Initialiser les variables de session
+if 'df_imputed' not in st.session_state:
+    st.session_state['df_imputed'] = None
+
+# Téléchargement du fichier
 uploaded_file = st.file_uploader("Télécharger un fichier CSV", type=['csv'])
 
 if uploaded_file is not None:
     try:
         # Essayer de charger avec différents séparateurs
+        df = None
         try:
             df = pd.read_csv(uploaded_file, sep=',')
         except:
             try:
-                # Réinitialiser le curseur du fichier avant de le relire
                 uploaded_file.seek(0)
                 df = pd.read_csv(uploaded_file, sep=';')
             except:
-                uploaded_file.seek(0)
-                df = pd.read_csv(uploaded_file, sep='\t')
+                try:
+                    uploaded_file.seek(0)
+                    df = pd.read_csv(uploaded_file, sep='\t')
+                except Exception as e:
+                    st.error(f"Impossible de lire le fichier CSV: {e}")
         
-        # Prétraiter les données
-        df = preprocess_data(df)
-        
-        st.success("Fichier chargé avec succès!")
-        
-        # Créer des onglets pour organiser l'interface
-        tab1, tab2, tab3 = st.tabs(["Aperçu des données", "Analyse de base", "Visualisations"])
-        
-        with tab1:
-            st.subheader("Aperçu des données")
-            st.dataframe(df.head())
+        if df is None or df.empty:
+            st.error("Le fichier est vide ou n'a pas pu être lu correctement.")
+        else:
+            # Prétraiter les données
+            df = preprocess_data(df)
             
-            st.subheader("Informations sur les colonnes")
-            buffer = st.empty()
-            with buffer.container():
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write("Types de données:")
-                    st.write(pd.DataFrame({'Type': df.dtypes}))
-                with col2:
-                    st.write("Valeurs manquantes:")
-                    st.write(pd.DataFrame({'Manquantes': df.isna().sum(), 
-                                          'Pourcentage': df.isna().sum() / len(df) * 100}))
-        
-        with tab2:
-            # Filtres pour les données - INSENSIBLES À LA CASSE
+            # Utiliser les données imputées si disponibles
+            if st.session_state['df_imputed'] is not None:
+                df = st.session_state['df_imputed']
+                st.success("Utilisation des données imputées!")
+            else:
+                st.success("Fichier chargé avec succès!")
+            
+            # Filtres dans la barre latérale
             st.sidebar.title("Filtres")
             
             if 'transaction' in df.columns:
-                # Obtenir les valeurs uniques et les trier
                 unique_transactions = sorted(df['transaction'].dropna().unique().tolist())
-                # Créer un affichage plus propre pour l'interface utilisateur
-                display_transactions = ["Tous"] + [t.capitalize() for t in unique_transactions]
-                # Créer un dictionnaire de mapping pour retrouver les valeurs d'origine
-                transaction_map = {t.capitalize(): t for t in unique_transactions}
+                display_transactions = ["Tous"] + [t.capitalize() for t in unique_transactions if isinstance(t, str)]
+                transaction_map = {t.capitalize(): t for t in unique_transactions if isinstance(t, str)}
                 transaction_map["Tous"] = "Tous"
                 
                 selected_display_transaction = st.sidebar.selectbox("Type de Transaction", display_transactions)
@@ -103,8 +753,8 @@ if uploaded_file is not None:
             
             if 'property_type' in df.columns:
                 unique_property_types = sorted(df['property_type'].dropna().unique().tolist())
-                display_property_types = ["Tous"] + [p.capitalize() for p in unique_property_types]
-                property_type_map = {p.capitalize(): p for p in unique_property_types}
+                display_property_types = ["Tous"] + [p.capitalize() for p in unique_property_types if isinstance(p, str)]
+                property_type_map = {p.capitalize(): p for p in unique_property_types if isinstance(p, str)}
                 property_type_map["Tous"] = "Tous"
                 
                 selected_display_property = st.sidebar.selectbox("Type de Bien", display_property_types)
@@ -114,8 +764,8 @@ if uploaded_file is not None:
             
             if 'city' in df.columns:
                 unique_cities = sorted(df['city'].dropna().unique().tolist())
-                display_cities = ["Toutes"] + [c.title() for c in unique_cities]
-                city_map = {c.title(): c for c in unique_cities}
+                display_cities = ["Toutes"] + [c.title() for c in unique_cities if isinstance(c, str)]
+                city_map = {c.title(): c for c in unique_cities if isinstance(c, str)}
                 city_map["Toutes"] = "Toutes"
                 
                 selected_display_city = st.sidebar.selectbox("Ville", display_cities)
@@ -132,185 +782,82 @@ if uploaded_file is not None:
             if selected_city != "Toutes" and 'city' in df.columns:
                 filtered_df = filtered_df[filtered_df['city'] == selected_city]
             
-            # Statistiques de base
-            st.subheader("Statistiques descriptives")
+            # Créer des onglets pour organiser l'interface
+            tab1, tab2, tab3, tab4, tab5 = st.tabs(["Aperçu des données", "Statistiques de base", "Imputation", "Visualisations avancées", "Apprentissage supervisé"])
             
-            # Sélectionner uniquement les colonnes numériques pour describe()
-            numeric_df = filtered_df.select_dtypes(include=['number'])
-            if not numeric_df.empty:
-                st.write(numeric_df.describe())
-            else:
-                st.warning("Aucune colonne numérique disponible pour l'analyse statistique.")
+            with tab1:
+                st.subheader("Aperçu des données")
+                st.dataframe(filtered_df.head())
+                
+                st.subheader("Informations sur les colonnes")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write("Types de données:")
+                    st.write(pd.DataFrame({'Type': filtered_df.dtypes}))
+                
+                with col2:
+                    st.write("Valeurs manquantes:")
+                    missing_data = pd.DataFrame({
+                        'Manquantes': filtered_df.isna().sum(), 
+                        'Pourcentage': (filtered_df.isna().sum() / len(filtered_df) * 100).round(2)
+                    })
+                    st.write(missing_data)
             
-            # Métriques clés
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Nombre de propriétés", len(filtered_df))
-            
-            with col2:
-                if 'price' in filtered_df.columns:
-                    avg_price = filtered_df['price'].dropna().mean()
-                    if pd.notna(avg_price):
-                        st.metric("Prix moyen", f"{avg_price:,.0f} TND")
-                    else:
-                        st.metric("Prix moyen", "N/A")
+            with tab2:
+                # Statistiques de base
+                st.subheader("Statistiques descriptives")
+                
+                # Sélectionner uniquement les colonnes numériques pour describe()
+                numeric_df = filtered_df.select_dtypes(include=['number'])
+                if not numeric_df.empty:
+                    st.dataframe(numeric_df.describe())
                 else:
-                    st.metric("Prix moyen", "Colonne manquante")
-            
-            with col3:
-                if 'size' in filtered_df.columns:
-                    avg_size = filtered_df['size'].dropna().mean()
-                    if pd.notna(avg_size):
-                        st.metric("Surface moyenne", f"{avg_size:.1f} m²")
+                    st.warning("Aucune colonne numérique disponible pour l'analyse statistique.")
+                
+                # Métriques clés
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("Nombre de propriétés", len(filtered_df))
+                
+                with col2:
+                    if 'price' in filtered_df.columns:
+                        avg_price = filtered_df['price'].dropna().mean()
+                        if pd.notna(avg_price):
+                            st.metric("Prix moyen", f"{avg_price:,.0f} TND")
+                        else:
+                            st.metric("Prix moyen", "N/A")
                     else:
-                        st.metric("Surface moyenne", "N/A")
-                else:
-                    st.metric("Surface moyenne", "Colonne manquante")
+                        st.metric("Prix moyen", "Colonne manquante")
+                
+                with col3:
+                    if 'size' in filtered_df.columns:
+                        avg_size = filtered_df['size'].dropna().mean()
+                        if pd.notna(avg_size):
+                            st.metric("Surface moyenne", f"{avg_size:.1f} m²")
+                        else:
+                            st.metric("Surface moyenne", "N/A")
+                    else:
+                        st.metric("Surface moyenne", "Colonne manquante")
+                
+                # Visualisations de base
+                basic_visualizations(filtered_df)
+            
+            with tab3:
+                # Section d'imputation
+                updated_df = imputation_section(df)
+                if updated_df is not None:
+                    df = updated_df  # Mettre à jour le dataframe avec les données imputées
+            
+            with tab4:
+                # Visualisations avancées
+                advanced_visualizations(filtered_df)
+            
+            with tab5:
+                # Section d'apprentissage supervisé
+                supervised_learning_section(df, filtered_df)
         
-        with tab3:
-            st.subheader("Visualisations")
-            
-            # Visualisation par ville - avec titres correctement formatés
-            if 'city' in filtered_df.columns:
-                st.subheader("Nombre de propriétés par ville")
-                city_counts = filtered_df['city'].value_counts().reset_index()
-                city_counts.columns = ['ville', 'nombre']
-                # Capitaliser les noms de ville pour l'affichage
-                city_counts['ville'] = city_counts['ville'].str.title()
-                
-                fig = px.bar(city_counts, x='ville', y='nombre', 
-                           title="Nombre de propriétés par ville")
-                st.plotly_chart(fig, use_container_width=True)
-            
-            # Prix moyen par type de propriété - avec titres correctement formatés
-            if 'property_type' in filtered_df.columns and 'price' in filtered_df.columns:
-                valid_price_df = filtered_df.dropna(subset=['price'])
-                if not valid_price_df.empty:
-                    st.subheader("Prix moyen par type de propriété")
-                    price_by_type = valid_price_df.groupby('property_type')['price'].mean().reset_index()
-                    price_by_type.columns = ['type', 'prix_moyen']
-                    # Capitaliser les types de bien pour l'affichage
-                    price_by_type['type'] = price_by_type['type'].str.capitalize()
-                    
-                    fig = px.bar(price_by_type, x='type', y='prix_moyen', 
-                               title="Prix moyen par type de propriété",
-                               labels={'prix_moyen': 'Prix moyen (TND)', 'type': 'Type de bien'})
-                    st.plotly_chart(fig, use_container_width=True)
-            
-            # Relation taille vs prix
-            if 'size' in filtered_df.columns and 'price' in filtered_df.columns:
-                valid_data = filtered_df.dropna(subset=['size', 'price'])
-                if len(valid_data) > 5:  # Au moins 5 points pour un scatter plot
-                    st.subheader("Relation entre taille et prix")
-                    
-                    # Si property_type existe, l'utiliser pour colorer les points
-                    if 'property_type' in valid_data.columns:
-                        # Créer une copie pour l'affichage avec property_type capitalisé
-                        plot_data = valid_data.copy()
-                        plot_data['property_type_display'] = plot_data['property_type'].str.capitalize()
-                        
-                        fig = px.scatter(plot_data, x='size', y='price', 
-                                       color='property_type_display',
-                                       title="Relation entre taille et prix",
-                                       labels={'size': 'Surface (m²)', 'price': 'Prix (TND)', 
-                                              'property_type_display': 'Type de bien'})
-                    else:
-                        fig = px.scatter(valid_data, x='size', y='price', 
-                                       title="Relation entre taille et prix",
-                                       labels={'size': 'Surface (m²)', 'price': 'Prix (TND)'})
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-            
-            # Carte thermique des commodités (si la colonne amenities existe)
-            if 'amenities' in filtered_df.columns:
-                st.subheader("Analyse des commodités")
-                
-                # Extraire et compter les commodités
-                amenities_list = []
-                for amenities in filtered_df['amenities'].dropna():
-                    if '+' in amenities:
-                        amenities_list.extend([a.strip().lower() for a in amenities.split('+')])
-                    elif ',' in amenities:
-                        amenities_list.extend([a.strip().lower() for a in amenities.split(',')])
-                    else:
-                        amenities_list.append(amenities.strip().lower())
-                
-                if amenities_list:
-                    amenities_counts = pd.Series(amenities_list).value_counts().reset_index()
-                    amenities_counts.columns = ['commodité', 'nombre']
-                    # Capitaliser pour l'affichage
-                    amenities_counts['commodité'] = amenities_counts['commodité'].str.capitalize()
-                    # Prendre les 15 plus fréquentes
-                    top_amenities = amenities_counts.head(15)
-                    
-                    fig = px.bar(top_amenities, x='commodité', y='nombre', 
-                               title="Top 15 des commodités les plus fréquentes",
-                               labels={'nombre': 'Fréquence', 'commodité': 'Commodité'})
-                    fig.update_layout(xaxis={'categoryorder': 'total descending'})
-                    st.plotly_chart(fig, use_container_width=True)
-    
     except Exception as e:
         st.error(f"Une erreur s'est produite lors du traitement du fichier: {e}")
         st.info("Conseil: Vérifiez le format de votre fichier CSV et assurez-vous que les colonnes sont correctement nommées.")
-
-else:
-    st.info("Veuillez télécharger un fichier CSV pour commencer l'analyse.")
-    
-    # Afficher un exemple de format attendu
-    st.subheader("Format de données attendu")
-    example_data = """
-    source,neighborhood,city,state,transaction,property_type,listing_date,price,suffix,size,rooms
-    century 21,La Soukra,La Soukra,Ariana,rent,Appartement,2025-05-08,1500,TTC,110,3
-    century 21,Hammam Sousse,Hammam Sousse,Sousse,rent,Appartement,2025-05-08,900,TTC,70,2
-    """
-    st.code(example_data, language="csv")
-    
-# # Ajout d'une section pour les insights
-# if uploaded_file is not None and 'filtered_df' in locals():
-#     st.header("Insights du marché immobilier")
-    
-#     # Calculer des insights intéressants basés sur les données
-#     insights = []
-    
-#     # Insight 1: Type de bien le plus cher en moyenne
-#     if 'property_type' in filtered_df.columns and 'price' in filtered_df.columns:
-#         valid_price_df = filtered_df.dropna(subset=['price'])
-#         if not valid_price_df.empty:
-#             price_by_type = valid_price_df.groupby('property_type')['price'].mean()
-#             if not price_by_type.empty:
-#                 most_expensive_type = price_by_type.idxmax()
-#                 highest_avg_price = price_by_type.max()
-#                 insights.append(f"Le type de bien le plus cher en moyenne est '{most_expensive_type.capitalize()}' avec un prix moyen de {highest_avg_price:,.0f} TND.")
-    
-#     # Insight 2: Quartier le plus représenté
-#     if 'neighborhood' in filtered_df.columns:
-#         neighborhood_counts = filtered_df['neighborhood'].value_counts()
-#         if not neighborhood_counts.empty:
-#             top_neighborhood = neighborhood_counts.index[0]
-#             top_count = neighborhood_counts.iloc[0]
-#             insights.append(f"Le quartier le plus représenté est '{top_neighborhood.title()}' avec {top_count} propriétés.")
-    
-#     # Insight 3: Rapport qualité-prix (prix/m²)
-#     if 'price' in filtered_df.columns and 'size' in filtered_df.columns:
-#         filtered_df['price_per_sqm'] = filtered_df['price'] / filtered_df['size']
-#         valid_data = filtered_df.dropna(subset=['price_per_sqm'])
-        
-#         if not valid_data.empty and 'city' in valid_data.columns:
-#             price_per_sqm_by_city = valid_data.groupby('city')['price_per_sqm'].mean().sort_values()
-            
-#             if not price_per_sqm_by_city.empty:
-#                 best_value_city = price_per_sqm_by_city.index[0]
-#                 best_value_price = price_per_sqm_by_city.iloc[0]
-#                 insights.append(f"La ville offrant le meilleur rapport qualité-prix est '{best_value_city.title()}' avec un prix moyen de {best_value_price:,.0f} TND/m².")
-    
-#     # Afficher les insights
-#     if insights:
-#         st.subheader("Points clés")
-#         for i, insight in enumerate(insights, 1):
-#             st.markdown(f"**{i}.** {insight}")
-#     else:
-#         st.info("Pas assez de données pour générer des insights pertinents.")
-    
-# Pied de page
-st.markdown("---")
-st.markdown("© 2025 - Mini-Projet d'Analyse du Marché Immobilier Tunisien")

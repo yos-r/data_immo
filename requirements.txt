@@ -6,3 +6,6 @@ seaborn
 plotly 
 scikit-learn
 missingno
+shap
+xgboost
+nbimporter
