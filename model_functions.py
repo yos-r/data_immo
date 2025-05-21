@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from IPython.display import display
+# from IPython.display import display
 import plotly.express as px
 import plotly.graph_objects as go
 import missingno as msno
@@ -68,7 +68,7 @@ def impute_missing_prices(df):
     df['suffix'] = df['suffix'].fillna('TTC')
     # Afficher les lignes où 'price' est toujours manquant après l'imputation
     null_price_rows = df[df['price'].isna()]
-    display(null_price_rows)
+    # display(null_price_rows)
     print(f"Nombre de lignes avec 'price' manquant après imputation : {null_price_rows.shape[0]}") # de 244 prix manquants on passe à 27
     
 def impute_condition_simple(df):
