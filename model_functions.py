@@ -62,14 +62,19 @@ def impute_missing_prices(df):
     df['price_ttc'] = df.groupby(['neighborhood', 'property_type','transaction'])['price_ttc'].transform(
         lambda x: x.fillna(x.mean())
     )
+    # take care of the rest
+    df['price'] = df.groupby(['city','transaction'])['price'].transform(
+        lambda x: x.fillna(x.mean())
+    )
+    df['price_ttc'] = df.groupby(['city','transaction'])['price_ttc'].transform(
+        lambda x: x.fillna(x.mean())
+    )
+    
     # Remplir les valeurs manquantes de 'listing_price' avec la valeur de 'price' si disponible
     df['listing_price'] = df['listing_price'].fillna(df['price'])
     # remplacer suffixe par ttc par defaut
     df['suffix'] = df['suffix'].fillna('TTC')
-    # Afficher les lignes où 'price' est toujours manquant après l'imputation
-    null_price_rows = df[df['price'].isna()]
-    # display(null_price_rows)
-    print(f"Nombre de lignes avec 'price' manquant après imputation : {null_price_rows.shape[0]}") # de 244 prix manquants on passe à 27
+    
     
 def impute_condition_simple(df):
     """

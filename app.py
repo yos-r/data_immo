@@ -304,14 +304,7 @@ def imputation_section(df):
                     progress_bar = st.progress(0)
                     
                     # 1. Imputation des prix
-                    if price_cols:
-                        progress_placeholder.write("Imputation des prix...")
-                        try:
-                            df_imputed = impute_missing_prices(df_imputed)
-                            progress_bar.progress(20)
-                            time.sleep(0.5)  # Pour une meilleure expérience utilisateur
-                        except Exception as e:
-                            st.error(f"Erreur lors de l'imputation des prix: {e}")
+                    # 
                     
                     # 2. Imputation de la condition
                     if 'condition' in condition_finishing_cols:
@@ -342,6 +335,7 @@ def imputation_section(df):
                                 impute_year='construction_year' in age_year_cols, 
                                 impute_age='age' in age_year_cols
                             )
+                            df_imputed['construction_year']=2025-df_imputed['age']
                             progress_bar.progress(75)
                             time.sleep(0.5)
                         except Exception as e:
@@ -365,7 +359,25 @@ def imputation_section(df):
                             time.sleep(0.3)
                         except Exception as e:
                             st.error(f"Erreur lors de l'imputation de {room_col}: {e}")
-                    
+                    # imputation des prix
+                    if price_cols:
+                        progress_placeholder.write("Imputation des prix...")
+                        try:
+                            # df_imputed = impute_missing_prices(df_imputed)
+                            df_imputed['price'] = df_imputed.groupby(['neighborhood', 'property_type','transaction'])['price'].transform(lambda x: x.fillna(x.mean()))
+                            df_imputed['price_ttc'] = df_imputed.groupby(['neighborhood', 'property_type','transaction'])['price_ttc'].transform(lambda x: x.fillna(x.mean()))
+                            df_imputed['price'] = df.groupby(['city','transaction'])['price'].transform(lambda x: x.fillna(x.mean()))
+                            df_imputed['price_ttc'] = df.groupby(['city','transaction'])['price_ttc'].transform(lambda x: x.fillna(x.mean()))
+                            df_imputed = df_imputed[df_imputed['price'].notnull()]
+    
+                            df_imputed['suffix'] = df_imputed['suffix'].fillna('TTC')
+                            
+                            df_imputed['listing_price'] = df_imputed['listing_price'].fillna(df_imputed['price'])
+                            
+                            progress_bar.progress(100)
+                            time.sleep(0.5)  
+                        except Exception as e:
+                            st.error(f"Erreur lors de l'imputation des prix: {e}")
                     progress_bar.progress(100)
                     progress_placeholder.empty()
                 
@@ -376,6 +388,7 @@ def imputation_section(df):
                 
                 # Analyse des valeurs manquantes avant
                 with col1:
+                    df.drop(columns=['amenities'], inplace=True)
                     st.write("Avant imputation")
                     missing_before = analyze_missing_data(df)
                     st.dataframe(missing_before)
@@ -393,6 +406,7 @@ def imputation_section(df):
                 # Analyse des valeurs manquantes après
                 with col2:
                     st.write("Après imputation")
+                    df_imputed.drop(columns=['amenities'], inplace=True)
                     missing_after = analyze_missing_data(df_imputed)
                     st.dataframe(missing_after)
                     
@@ -412,7 +426,7 @@ def imputation_section(df):
                 # Sélectionnez une colonne pour visualiser l'impact de l'imputation
                 all_imputed_cols = price_cols + condition_finishing_cols + age_year_cols + room_cols + binary_cols
                 
-                if all_imputed_cols:
+                if True:
                     vis_col = st.selectbox(
                         "Sélectionner une colonne pour visualiser l'impact de l'imputation",
                         all_imputed_cols
