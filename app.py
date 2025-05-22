@@ -15,8 +15,12 @@ from model_functions import (
     random_forest_par_segment,
     xgboost_simple,
     comparer_modeles,
-    
-    # Fonctions d'imputation
+    prepare_data_for_clustering,
+    apply_dbscan_clustering,
+    visualize_clustering_results,
+    apply_pca_analysis,
+    apply_kmeans_clustering,
+    apply_dbscan_clustering,
     impute_missing_prices,
     impute_condition_simple,
     impute_finishing_simple,
@@ -787,6 +791,319 @@ def supervised_learning_section(df, filtered_df):
                 except Exception as e:
                     st.error(f"Une erreur s'est produite lors de l'entraînement du modèle: {e}")
 
+def unsupervised_learning_section(df, filtered_df):
+    st.header("Apprentissage Non Supervisé")
+    
+    if df is None or filtered_df is None or df.empty or filtered_df.empty:
+        st.error("Aucune donnée disponible pour l'apprentissage non supervisé.")
+        return
+    
+    st.markdown("""
+    <div class="info-box">
+    L'apprentissage non supervisé permet de découvrir des structures cachées dans les données sans avoir de variable cible.
+    Nous utiliserons le clustering pour identifier des groupes de propriétés similaires et la PCA pour réduire la dimensionnalité.
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Sélection des caractéristiques pour le clustering
+    st.subheader("Sélection des caractéristiques")
+    
+    # Obtenir les colonnes numériques disponibles
+    numeric_cols = filtered_df.select_dtypes(include=['number']).columns.tolist()
+    exclude_cols = ['date', 'source', 'neighborhood', 'suffix', 'listing_price', 'price_ttc', 'construction_year']
+    available_features = [col for col in numeric_cols if col not in exclude_cols]
+    
+    # Interface pour sélectionner les caractéristiques
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        selected_features = st.multiselect(
+            "Sélectionner les caractéristiques pour le clustering",
+            available_features,
+            default=available_features[:6] if len(available_features) >= 6 else available_features,
+            help="Choisissez les caractéristiques qui seront utilisées pour identifier les groupes de propriétés similaires"
+        )
+    
+    with col2:
+        # Filtres pour l'apprentissage non supervisé
+        st.write("**Filtres appliqués:**")
+        if 'city' in filtered_df.columns:
+            city_options = ["Toutes"] + sorted(filtered_df['city'].dropna().unique().tolist())
+            selected_city = st.selectbox("Ville", city_options, key="unsup_city")
+            selected_city = None if selected_city == "Toutes" else selected_city
+        else:
+            selected_city = None
+        
+        if 'property_type' in filtered_df.columns:
+            property_options = ["Tous"] + sorted(filtered_df['property_type'].dropna().unique().tolist())
+            selected_property = st.selectbox("Type de propriété", property_options, key="unsup_property")
+            selected_property = None if selected_property == "Tous" else selected_property
+        else:
+            selected_property = None
+    
+    # Appliquer les filtres
+    df_for_clustering = filtered_df.copy()
+    if selected_city is not None:
+        df_for_clustering = df_for_clustering[df_for_clustering['city'] == selected_city]
+    if selected_property is not None:
+        df_for_clustering = df_for_clustering[df_for_clustering['property_type'] == selected_property]
+    
+    # Vérifier qu'on a assez de données
+    if len(df_for_clustering) < 10:
+        st.warning("Pas assez de données pour l'analyse de clustering (minimum 10 observations). Veuillez élargir les filtres.")
+        return
+    
+    # Paramètres des algorithmes
+    st.subheader("Paramètres des algorithmes")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        algorithm = st.selectbox(
+            "Algorithme de clustering",
+            ["K-Means", "DBSCAN", "Comparaison K-Means vs DBSCAN"]
+        )
+    
+    with col2:
+        if algorithm in ["K-Means", "Comparaison K-Means vs DBSCAN"]:
+            max_clusters = min(10, len(df_for_clustering) // 5)  # Maximum raisonnable de clusters
+            n_clusters_range = st.slider(
+                "Nombre de clusters à tester (K-Means)",
+                min_value=2,
+                max_value=max_clusters,
+                value=(2, min(8, max_clusters)),
+                help="Range du nombre de clusters à tester pour K-Means"
+            )
+    
+    with col3:
+        n_components_pca = st.slider(
+            "Nombre de composantes PCA",
+            min_value=2,
+            max_value=min(len(selected_features), 10),
+            value=min(3, len(selected_features)),
+            help="Nombre de composantes principales à conserver pour la visualisation"
+        )
+    
+    # Bouton pour lancer l'analyse
+    if st.button("Lancer l'analyse de clustering", type="primary"):
+        if not selected_features:
+            st.error("Veuillez sélectionner au moins une caractéristique pour le clustering.")
+            return
+        
+        with st.spinner("Analyse en cours..."):
+            try:
+                # Préparer les données
+                df_scaled, scaler, feature_names = prepare_data_for_clustering(
+                    df_for_clustering, 
+                    features_for_clustering=selected_features
+                )
+                
+                if len(df_scaled) < 10:
+                    st.error("Pas assez de données valides après nettoyage. Vérifiez vos données.")
+                    return
+                
+                st.success(f"Données préparées: {len(df_scaled)} observations avec {len(feature_names)} caractéristiques")
+                
+                # Afficher les caractéristiques utilisées
+                st.write(f"**Caractéristiques utilisées:** {', '.join(feature_names)}")
+                
+                # Appliquer PCA
+                pca_model, df_pca, explained_variance = apply_pca_analysis(df_scaled, n_components_pca)
+                
+                # Appliquer le clustering selon l'algorithme sélectionné
+                if algorithm == "K-Means":
+                    # K-Means uniquement
+                    st.subheader("Résultats K-Means")
+                    
+                    kmeans_model, best_n_clusters, cluster_labels, metrics, scores, n_clusters_list = apply_kmeans_clustering(
+                        df_scaled, 
+                        n_clusters_range=n_clusters_range
+                    )
+                    
+                    # Afficher les métriques
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Clusters optimaux", best_n_clusters)
+                    with col2:
+                        st.metric("Score Silhouette", f"{metrics['silhouette_score']:.4f}")
+                    with col3:
+                        st.metric("Score Calinski-Harabasz", f"{metrics['calinski_harabasz_score']:.0f}")
+                    with col4:
+                        st.metric("Inertie", f"{metrics['inertia']:.0f}")
+                    
+                    # Graphique d'optimisation du nombre de clusters
+                    fig_elbow = px.line(
+                        x=n_clusters_list, 
+                        y=scores,
+                        title="Score de Silhouette vs Nombre de Clusters",
+                        labels={'x': 'Nombre de clusters', 'y': 'Score de Silhouette'}
+                    )
+                    fig_elbow.add_vline(x=best_n_clusters, line_dash="dash", line_color="red", 
+                                       annotation_text=f"Optimal: {best_n_clusters}")
+                    st.plotly_chart(fig_elbow, use_container_width=True)
+                    
+                    # Visualisation des résultats
+                    fig_clustering = visualize_clustering_results(
+                        df_scaled, cluster_labels, pca_model, df_pca, "K-Means"
+                    )
+                    st.plotly_chart(fig_clustering, use_container_width=True)
+                
+                elif algorithm == "DBSCAN":
+                    # DBSCAN uniquement
+                    st.subheader("Résultats DBSCAN")
+                    
+                    dbscan_model, cluster_labels, metrics = apply_dbscan_clustering(df_scaled)
+                    
+                    # Afficher les métriques
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Clusters trouvés", metrics['n_clusters'])
+                    with col2:
+                        st.metric("Points de bruit", metrics['n_noise_points'])
+                    with col3:
+                        st.metric("Ratio de bruit", f"{metrics['noise_ratio']*100:.1f}%")
+                    with col4:
+                        if metrics['silhouette_score'] > 0:
+                            st.metric("Score Silhouette", f"{metrics['silhouette_score']:.4f}")
+                        else:
+                            st.metric("Score Silhouette", "N/A")
+                    
+                    # Afficher les paramètres optimaux
+                    st.write(f"**Paramètres optimaux:** eps={metrics['eps']:.3f}, min_samples={metrics['min_samples']}")
+                    
+                    # Visualisation des résultats
+                    fig_clustering = visualize_clustering_results(
+                        df_scaled, cluster_labels, pca_model, df_pca, "DBSCAN"
+                    )
+                    st.plotly_chart(fig_clustering, use_container_width=True)
+                
+                else:  # Comparaison
+                    st.subheader("Comparaison K-Means vs DBSCAN")
+                    
+                    # K-Means
+                    kmeans_model, best_n_clusters, kmeans_labels, kmeans_metrics, _, _ = apply_kmeans_clustering(
+                        df_scaled, n_clusters_range=n_clusters_range
+                    )
+                    
+                    # DBSCAN
+                    dbscan_model, dbscan_labels, dbscan_metrics = apply_dbscan_clustering(df_scaled)
+                    
+                    # Tableau de comparaison
+                    comparison_data = {
+                        'Métrique': ['Nombre de clusters', 'Score Silhouette', 'Points de bruit'],
+                        'K-Means': [
+                            best_n_clusters,
+                            f"{kmeans_metrics['silhouette_score']:.4f}",
+                            "0"
+                        ],
+                        'DBSCAN': [
+                            dbscan_metrics['n_clusters'],
+                            f"{dbscan_metrics['silhouette_score']:.4f}" if dbscan_metrics['silhouette_score'] > 0 else "N/A",
+                            f"{dbscan_metrics['n_noise_points']}"
+                        ]
+                    }
+                    
+                    comparison_df = pd.DataFrame(comparison_data)
+                    st.dataframe(comparison_df, use_container_width=True)
+                    
+                    # Visualisations côte à côte
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        fig_kmeans = visualize_clustering_results(
+                            df_scaled, kmeans_labels, pca_model, df_pca, "K-Means"
+                        )
+                        fig_kmeans.update_layout(height=600, title_text="K-Means Clustering")
+                        st.plotly_chart(fig_kmeans, use_container_width=True)
+                    
+                    with col2:
+                        fig_dbscan = visualize_clustering_results(
+                            df_scaled, dbscan_labels, pca_model, df_pca, "DBSCAN"
+                        )
+                        fig_dbscan.update_layout(height=600, title_text="DBSCAN Clustering")
+                        st.plotly_chart(fig_dbscan, use_container_width=True)
+                
+                # Analyse des clusters par caractéristiques originales
+                st.subheader("Analyse des clusters")
+                
+                # Utiliser les labels du dernier algorithme exécuté
+                final_labels = cluster_labels if algorithm != "Comparaison K-Means vs DBSCAN" else kmeans_labels
+                
+                # Ajouter les labels de clusters aux données originales
+                df_with_clusters = df_for_clustering.iloc[df_scaled.index].copy()
+                df_with_clusters['Cluster'] = final_labels
+                
+                # Statistiques par cluster
+                cluster_stats = df_with_clusters.groupby('Cluster')[selected_features].agg(['mean', 'std']).round(2)
+                
+                st.write("**Statistiques moyennes par cluster:**")
+                st.dataframe(cluster_stats)
+                
+                # Graphique radar pour comparer les clusters
+                if len(set(final_labels)) <= 8:  # Limiter à 8 clusters pour la lisibilité
+                    cluster_means = df_with_clusters.groupby('Cluster')[selected_features].mean()
+                    
+                    # Normaliser les valeurs pour le radar chart (0-1)
+                    from sklearn.preprocessing import MinMaxScaler
+                    radar_scaler = MinMaxScaler()
+                    cluster_means_normalized = pd.DataFrame(
+                        radar_scaler.fit_transform(cluster_means),
+                        columns=cluster_means.columns,
+                        index=cluster_means.index
+                    )
+                    
+                    fig_radar = go.Figure()
+                    
+                    colors = px.colors.qualitative.Set3
+                    for i, (cluster_id, row) in enumerate(cluster_means_normalized.iterrows()):
+                        if cluster_id != -1:  # Exclure le bruit pour DBSCAN
+                            fig_radar.add_trace(go.Scatterpolar(
+                                r=row.values.tolist() + [row.values[0]],  # Fermer le polygon
+                                theta=row.index.tolist() + [row.index[0]],
+                                fill='toself',
+                                name=f'Cluster {cluster_id}',
+                                marker_color=colors[i % len(colors)]
+                            ))
+                    
+                    fig_radar.update_layout(
+                        polar=dict(
+                            radialaxis=dict(
+                                visible=True,
+                                range=[0, 1]
+                            )),
+                        showlegend=True,
+                        title="Profil des clusters (valeurs normalisées)"
+                    )
+                    
+                    st.plotly_chart(fig_radar, use_container_width=True)
+                
+            except Exception as e:
+                st.error(f"Une erreur s'est produite lors de l'analyse: {e}")
+                st.info("Vérifiez que vos données sont bien formatées et qu'il y a suffisamment d'observations.")
+    
+    # Section d'aide et interprétation
+    with st.expander("💡 Guide d'interprétation des résultats", expanded=False):
+        st.markdown("""
+        ### K-Means
+        - **Score de Silhouette** : Mesure la qualité du clustering (entre -1 et 1, plus proche de 1 = meilleur)
+        - **Inertie** : Somme des distances au carré des points à leur centroïde (plus faible = mieux)
+        - **Score Calinski-Harabasz** : Ratio de dispersion entre/dans les clusters (plus élevé = mieux)
+        
+        ### DBSCAN
+        - **Points de bruit** : Points qui ne peuvent être assignés à aucun cluster
+        - **eps** : Distance maximale entre deux points pour qu'ils soient considérés comme voisins
+        - **min_samples** : Nombre minimum de points requis pour former un cluster
+        
+        ### PCA (Analyse en Composantes Principales)
+        - **Variance expliquée** : Pourcentage d'information conservée par chaque composante
+        - Les premières composantes capturent le maximum de variabilité des données
+        
+        ### Conseils d'analyse
+        - Comparez les profils des clusters pour identifier les caractéristiques discriminantes
+        - Un bon clustering sépare des groupes avec des comportements distincts
+        - Utilisez le contexte métier pour valider la pertinence des clusters trouvés
+        """)
+
 # Application principale
 # Initialiser les variables de session
 if 'df_imputed' not in st.session_state:
@@ -870,7 +1187,7 @@ if uploaded_file is not None:
                 filtered_df = filtered_df[filtered_df['city'] == selected_city]
             
             # Créer des onglets pour organiser l'interface
-            tab1, tab2, tab3, tab4, tab5 = st.tabs(["Aperçu des données", "Statistiques de base", "Imputation", "Visualisations avancées", "Apprentissage supervisé"])
+            tab1, tab2, tab3, tab4, tab5,tab6 = st.tabs(["Aperçu des données", "Statistiques de base","Visualisations avancées", "Imputation" , "Apprentissage supervisé","Apprentissage non supervisé"])
             
             with tab1:
                 st.subheader("Aperçu des données")
@@ -910,11 +1227,14 @@ if uploaded_file is not None:
                 
                 with col2:
                     if 'price' in filtered_df.columns:
-                        avg_price = filtered_df['price'].dropna().mean()
-                        if pd.notna(avg_price):
-                            st.metric("Prix moyen", f"{avg_price:,.0f} TND")
+                        avg_price_sale = filtered_df.loc[filtered_df['transaction'] == 'sale', 'price'].dropna().mean()
+                        if pd.notna(avg_price_sale):
+                            st.metric("Prix moyen de vente", f"{avg_price_sale:,.0f} TND")
                         else:
                             st.metric("Prix moyen", "N/A")
+                        avg_price_rent = filtered_df.loc[filtered_df['transaction'] == 'rent', 'price'].dropna().mean()
+                        if pd.notna(avg_price_rent):
+                            st.metric("Prix moyen de location", f"{avg_price_rent:,.0f} TND")
                     else:
                         st.metric("Prix moyen", "Colonne manquante")
                 
@@ -930,20 +1250,22 @@ if uploaded_file is not None:
                 
                 # Visualisations de base
                 basic_visualizations(filtered_df)
-            
             with tab3:
+                # Visualisations avancées
+                advanced_visualizations(filtered_df)
+                
+            with tab4:
                 # Section d'imputation
                 updated_df = imputation_section(df)
                 if updated_df is not None:
                     df = updated_df  # Mettre à jour le dataframe avec les données imputées
             
-            with tab4:
-                # Visualisations avancées
-                advanced_visualizations(filtered_df)
-            
             with tab5:
                 # Section d'apprentissage supervisé
                 supervised_learning_section(df, filtered_df)
+                
+            with tab6:
+                unsupervised_learning_section(df, filtered_df)
         
     except Exception as e:
         st.error(f"Une erreur s'est produite lors du traitement du fichier: {e}")

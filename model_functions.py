@@ -1265,3 +1265,364 @@ def comparer_modeles(df, city=None, property_type=None, transaction=None, target
     plt.show()
     
     return comparison
+
+# Imports supplémentaires à ajouter en haut du fichier
+from sklearn.cluster import KMeans, DBSCAN
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import silhouette_score, adjusted_rand_score, calinski_harabasz_score
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+# Fonctions d'apprentissage non supervisé à ajouter dans model_functions.py
+
+def prepare_data_for_clustering(df, features_for_clustering=None):
+    """
+    Prépare les données pour le clustering
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        DataFrame avec les données
+    features_for_clustering : list, optional
+        Liste des caractéristiques à utiliser pour le clustering
+        
+    Returns:
+    --------
+    df_scaled : pandas.DataFrame
+        Données standardisées pour le clustering
+    scaler : StandardScaler
+        L'objet scaler utilisé
+    feature_names : list
+        Noms des caractéristiques utilisées
+    """
+    df_prep = df.copy()
+    
+    # Encoder les variables catégorielles si nécessaire
+    if 'condition' in df_prep.columns:
+        condition_categories = ['à rénover', 'à rafraichir', 'bonne condition', 'excellente condition', 'neuf']
+        cat_map = {cat: i for i, cat in enumerate(condition_categories)}
+        df_prep['condition'] = df_prep['condition'].map(cat_map)
+        df_prep['condition'].fillna(df_prep['condition'].median(), inplace=True)
+    
+    if 'finishing' in df_prep.columns:
+        finishing_categories = ['social', 'économique', 'moyen standing', 'haut standing', 'très haut standing']
+        cat_map = {cat: i for i, cat in enumerate(finishing_categories)}
+        df_prep['finishing'] = df_prep['finishing'].map(cat_map)
+        df_prep['finishing'].fillna(df_prep['finishing'].median(), inplace=True)
+    
+    # Sélectionner les caractéristiques pour le clustering
+    if features_for_clustering is None:
+        # Utiliser toutes les colonnes numériques sauf les identifiants et colonnes non pertinentes
+        exclude_cols = ['date', 'source', 'neighborhood', 'suffix', 'listing_price', 'price_ttc', 'construction_year']
+        numeric_cols = df_prep.select_dtypes(include=['number']).columns
+        features_for_clustering = [col for col in numeric_cols if col not in exclude_cols]
+    
+    # Vérifier que les colonnes existent
+    features_for_clustering = [col for col in features_for_clustering if col in df_prep.columns]
+    
+    # Extraire les données pour le clustering
+    X = df_prep[features_for_clustering].dropna()
+    
+    # Standardiser les données
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    # Créer un DataFrame avec les données standardisées
+    df_scaled = pd.DataFrame(X_scaled, columns=features_for_clustering, index=X.index)
+    
+    return df_scaled, scaler, features_for_clustering
+
+def apply_kmeans_clustering(df_scaled, n_clusters_range=(2, 10), random_state=42):
+    """
+    Applique K-Means clustering avec optimisation du nombre de clusters
+    
+    Parameters:
+    -----------
+    df_scaled : pandas.DataFrame
+        Données standardisées
+    n_clusters_range : tuple
+        Range du nombre de clusters à tester
+    random_state : int
+        Graine pour la reproductibilité
+        
+    Returns:
+    --------
+    best_model : KMeans
+        Meilleur modèle K-Means
+    best_n_clusters : int
+        Nombre optimal de clusters
+    cluster_labels : array
+        Labels des clusters pour chaque point
+    metrics : dict
+        Métriques d'évaluation
+    """
+    best_score = -1
+    best_model = None
+    best_n_clusters = 2
+    
+    scores = []
+    n_clusters_list = list(range(n_clusters_range[0], n_clusters_range[1] + 1))
+    
+    print("Optimisation du nombre de clusters pour K-Means...")
+    
+    for n_clusters in n_clusters_list:
+        kmeans = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10)
+        cluster_labels = kmeans.fit_predict(df_scaled)
+        
+        # Calculer le score de silhouette
+        if len(set(cluster_labels)) > 1:  # Au moins 2 clusters différents
+            silhouette_avg = silhouette_score(df_scaled, cluster_labels)
+            scores.append(silhouette_avg)
+            
+            if silhouette_avg > best_score:
+                best_score = silhouette_avg
+                best_model = kmeans
+                best_n_clusters = n_clusters
+        else:
+            scores.append(0)
+    
+    # Obtenir les labels finaux
+    cluster_labels = best_model.predict(df_scaled)
+    
+    # Calculer les métriques
+    metrics = {
+        'silhouette_score': silhouette_score(df_scaled, cluster_labels),
+        'calinski_harabasz_score': calinski_harabasz_score(df_scaled, cluster_labels),
+        'inertia': best_model.inertia_,
+        'n_clusters': best_n_clusters
+    }
+    
+    print(f"Nombre optimal de clusters: {best_n_clusters}")
+    print(f"Score de silhouette: {metrics['silhouette_score']:.4f}")
+    
+    return best_model, best_n_clusters, cluster_labels, metrics, scores, n_clusters_list
+
+def apply_dbscan_clustering(df_scaled, eps_range=(0.3, 2.0), min_samples_range=(3, 10)):
+    """
+    Applique DBSCAN clustering avec optimisation des paramètres
+    
+    Parameters:
+    -----------
+    df_scaled : pandas.DataFrame
+        Données standardisées
+    eps_range : tuple
+        Range des valeurs eps à tester
+    min_samples_range : tuple
+        Range des valeurs min_samples à tester
+        
+    Returns:
+    --------
+    best_model : DBSCAN
+        Meilleur modèle DBSCAN
+    cluster_labels : array
+        Labels des clusters
+    metrics : dict
+        Métriques d'évaluation
+    """
+    best_score = -1
+    best_model = None
+    best_params = {}
+    
+    eps_values = np.linspace(eps_range[0], eps_range[1], 10)
+    min_samples_values = range(min_samples_range[0], min_samples_range[1] + 1)
+    
+    print("Optimisation des paramètres pour DBSCAN...")
+    
+    for eps in eps_values:
+        for min_samples in min_samples_values:
+            dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+            cluster_labels = dbscan.fit_predict(df_scaled)
+            
+            # Vérifier qu'il y a au moins 2 clusters (sans compter le bruit)
+            unique_labels = set(cluster_labels)
+            n_clusters = len(unique_labels) - (1 if -1 in unique_labels else 0)
+            
+            if n_clusters >= 2:
+                # Calculer le score de silhouette (en excluant le bruit)
+                mask = cluster_labels != -1
+                if mask.sum() > 1:
+                    silhouette_avg = silhouette_score(df_scaled[mask], cluster_labels[mask])
+                    
+                    if silhouette_avg > best_score:
+                        best_score = silhouette_avg
+                        best_model = dbscan
+                        best_params = {'eps': eps, 'min_samples': min_samples}
+    
+    if best_model is None:
+        # Si aucun bon paramètre n'est trouvé, utiliser des valeurs par défaut
+        print("Aucun paramètre optimal trouvé, utilisation des valeurs par défaut")
+        best_model = DBSCAN(eps=0.5, min_samples=5)
+        best_params = {'eps': 0.5, 'min_samples': 5}
+    
+    # Obtenir les labels finaux
+    cluster_labels = best_model.fit_predict(df_scaled)
+    
+    # Calculer les métriques
+    unique_labels = set(cluster_labels)
+    n_clusters = len(unique_labels) - (1 if -1 in unique_labels else 0)
+    n_noise = list(cluster_labels).count(-1)
+    
+    metrics = {
+        'n_clusters': n_clusters,
+        'n_noise_points': n_noise,
+        'noise_ratio': n_noise / len(cluster_labels),
+        'eps': best_params['eps'],
+        'min_samples': best_params['min_samples']
+    }
+    
+    # Calculer le score de silhouette si possible
+    if n_clusters >= 2:
+        mask = cluster_labels != -1
+        if mask.sum() > 1:
+            metrics['silhouette_score'] = silhouette_score(df_scaled[mask], cluster_labels[mask])
+        else:
+            metrics['silhouette_score'] = 0
+    else:
+        metrics['silhouette_score'] = 0
+    
+    print(f"Nombre de clusters trouvés: {n_clusters}")
+    print(f"Points de bruit: {n_noise} ({metrics['noise_ratio']*100:.1f}%)")
+    print(f"Paramètres optimaux: eps={best_params['eps']:.3f}, min_samples={best_params['min_samples']}")
+    
+    return best_model, cluster_labels, metrics
+
+def apply_pca_analysis(df_scaled, n_components=None):
+    """
+    Applique l'analyse en composantes principales (PCA)
+    
+    Parameters:
+    -----------
+    df_scaled : pandas.DataFrame
+        Données standardisées
+    n_components : int, optional
+        Nombre de composantes à conserver
+        
+    Returns:
+    --------
+    pca_model : PCA
+        Modèle PCA ajusté
+    df_pca : pandas.DataFrame
+        Données transformées par PCA
+    explained_variance_ratio : array
+        Ratio de variance expliquée par chaque composante
+    """
+    if n_components is None:
+        n_components = min(df_scaled.shape[1], 10)  # Maximum 10 composantes ou nombre de features
+    
+    pca = PCA(n_components=n_components)
+    pca_data = pca.fit_transform(df_scaled)
+    
+    # Créer un DataFrame avec les composantes principales
+    component_names = [f'PC{i+1}' for i in range(n_components)]
+    df_pca = pd.DataFrame(pca_data, columns=component_names, index=df_scaled.index)
+    
+    print(f"Variance expliquée par les {n_components} premières composantes:")
+    for i, var_exp in enumerate(pca.explained_variance_ratio_):
+        print(f"  PC{i+1}: {var_exp*100:.2f}%")
+    print(f"Variance totale expliquée: {pca.explained_variance_ratio_.sum()*100:.2f}%")
+    
+    return pca, df_pca, pca.explained_variance_ratio_
+
+def visualize_clustering_results(df_scaled, cluster_labels, pca_model, df_pca, algorithm_name):
+    """
+    Visualise les résultats du clustering
+    """
+    # Créer des sous-graphiques
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=[
+            f'{algorithm_name} - Clusters (2D PCA)',
+            'Distribution des clusters',
+            'Variance expliquée par PCA',
+            f'{algorithm_name} - Clusters (3D si possible)'
+        ],
+        specs=[[{'type': 'scatter'}, {'type': 'bar'}],
+               [{'type': 'bar'}, {'type': 'scatter3d'}]]
+    )
+    
+    # Couleurs pour les clusters
+    unique_labels = sorted(set(cluster_labels))
+    colors = px.colors.qualitative.Set3[:len(unique_labels)]
+    
+    # 1. Scatter plot 2D avec PCA
+    for i, label in enumerate(unique_labels):
+        mask = cluster_labels == label
+        cluster_name = f'Bruit' if label == -1 else f'Cluster {label}'
+        
+        fig.add_trace(
+            go.Scatter(
+                x=df_pca.iloc[mask, 0],
+                y=df_pca.iloc[mask, 1],
+                mode='markers',
+                name=cluster_name,
+                marker=dict(color=colors[i] if label != -1 else 'black'),
+                showlegend=True
+            ),
+            row=1, col=1
+        )
+    
+    # 2. Distribution des clusters
+    cluster_counts = pd.Series(cluster_labels).value_counts().sort_index()
+    cluster_names = [f'Bruit' if idx == -1 else f'Cluster {idx}' for idx in cluster_counts.index]
+    
+    fig.add_trace(
+        go.Bar(
+            x=cluster_names,
+            y=cluster_counts.values,
+            marker_color=[colors[i] if cluster_counts.index[i] != -1 else 'black' 
+                         for i in range(len(cluster_counts))],
+            showlegend=False
+        ),
+        row=1, col=2
+    )
+    
+    # 3. Variance expliquée par PCA
+    fig.add_trace(
+        go.Bar(
+            x=[f'PC{i+1}' for i in range(len(pca_model.explained_variance_ratio_))],
+            y=pca_model.explained_variance_ratio_ * 100,
+            marker_color='lightblue',
+            showlegend=False
+        ),
+        row=2, col=1
+    )
+    
+    # 4. Scatter plot 3D si on a au moins 3 composantes
+    if df_pca.shape[1] >= 3:
+        for i, label in enumerate(unique_labels):
+            mask = cluster_labels == label
+            cluster_name = f'Bruit' if label == -1 else f'Cluster {label}'
+            
+            fig.add_trace(
+                go.Scatter3d(
+                    x=df_pca.iloc[mask, 0],
+                    y=df_pca.iloc[mask, 1],
+                    z=df_pca.iloc[mask, 2],
+                    mode='markers',
+                    name=f'{cluster_name} (3D)',
+                    marker=dict(
+                        color=colors[i] if label != -1 else 'black',
+                        size=3
+                    ),
+                    showlegend=False
+                ),
+                row=2, col=2
+            )
+    
+    # Mise à jour des axes
+    fig.update_xaxes(title_text="PC1", row=1, col=1)
+    fig.update_yaxes(title_text="PC2", row=1, col=1)
+    fig.update_xaxes(title_text="Clusters", row=1, col=2)
+    fig.update_yaxes(title_text="Nombre de points", row=1, col=2)
+    fig.update_xaxes(title_text="Composantes", row=2, col=1)
+    fig.update_yaxes(title_text="Variance expliquée (%)", row=2, col=1)
+    
+    # Mise à jour du layout
+    fig.update_layout(
+        height=800,
+        title_text=f"Analyse {algorithm_name}",
+        showlegend=True
+    )
+    
+    return fig
