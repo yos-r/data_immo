@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-# from IPython.display import display
 import plotly.express as px
 import plotly.graph_objects as go
 import missingno as msno
@@ -12,10 +11,17 @@ from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from sklearn.preprocessing import StandardScaler
-
 import xgboost as xgb
 import shap
-
+from sklearn.cluster import KMeans, DBSCAN
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import silhouette_score, adjusted_rand_score, calinski_harabasz_score
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
+from scipy.spatial.distance import pdist
+import matplotlib.pyplot as plt
 def read_data(file_path):
     df = pd.read_csv('data.csv')
     print(f"Aperçu des données ({df.shape[0]} lignes, {df.shape[1]} colonnes):")
@@ -51,10 +57,13 @@ def analyze_missing_data(df):
     
     # Trier par pourcentage de valeurs manquantes (décroissant)
     missing_data = missing_data.sort_values('Pourcentage NA (%)', ascending=False)
-    
+
     return missing_data
+
+
 def impute_missing_prices(df):
     """
+    Imputation des prix manquants dans le DataFrame immobilier en utilisant la moyenne par transaction, type et quartier
     """
     df['price'] = df.groupby(['neighborhood', 'property_type','transaction'])['price'].transform(
         lambda x: x.fillna(x.mean())
@@ -74,8 +83,7 @@ def impute_missing_prices(df):
     df['listing_price'] = df['listing_price'].fillna(df['price'])
     # remplacer suffixe par ttc par defaut
     df['suffix'] = df['suffix'].fillna('TTC')
-    
-    
+    return df   
 def impute_condition_simple(df):
     """
     Impute les valeurs manquantes dans la colonne 'condition' en se basant sur:
@@ -188,7 +196,6 @@ def impute_condition_simple(df):
         print(f"Attention : {final_missing} valeurs restent manquantes après imputation.")
     
     return df_imputed
-
 def impute_finishing_simple(df):
     """
     Impute les valeurs manquantes dans la colonne 'finishing' en se basant sur:
@@ -301,7 +308,6 @@ def impute_finishing_simple(df):
         print(f"Attention : {final_missing} valeurs restent manquantes après imputation.")
     
     return df_imputed
-
 def impute_property_year_age(df, impute_year=True, impute_age=True, method='grouped_median'):
     """
     Impute les valeurs manquantes dans les colonnes 'year' (année de construction) 
@@ -554,7 +560,6 @@ def impute_property_year_age(df, impute_year=True, impute_age=True, method='grou
         df_imputed.drop('price_range', axis=1, inplace=True)
     
     return df_imputed
-
 def impute_binary_amenities(df, binary_columns=None, grouping_columns=['city', 'property_type', 'transaction']):
     """
     Impute les valeurs manquantes dans les colonnes binaires représentant les équipements immobiliers.
@@ -724,7 +729,8 @@ def simple_impute_rooms(df, rooms_col='rooms', area_col='size', property_type_co
     
     return df_imputed
 
-# apprentissage supervisé
+
+
 def prepare_data_for_regression(df):
     """
     Prépare les données pour la régression - encode uniquement condition, finishing et variables binaires
@@ -756,7 +762,6 @@ def prepare_data_for_regression(df):
             df_prep[col] = df_prep[col].astype(int)
     
     return df_prep
-
 def regression_par_segment(df, city=None, property_type=None, transaction=None, target_column='price'):
     """
     Réalise une régression linéaire simple sur un segment spécifique des données
@@ -1034,7 +1039,6 @@ def random_forest_par_segment(df, city=None, property_type=None, transaction=Non
     }
     
     return rf_model, feature_importance, metrics
-
 def xgboost_simple(df, city=None, property_type=None, transaction=None, target_column='price'):
     """
     Fonction simple pour appliquer XGBoost à un segment spécifique
@@ -1266,16 +1270,7 @@ def comparer_modeles(df, city=None, property_type=None, transaction=None, target
     
     return comparison
 
-# Imports supplémentaires à ajouter en haut du fichier
-from sklearn.cluster import KMeans, DBSCAN
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import silhouette_score, adjusted_rand_score, calinski_harabasz_score
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-
-# Fonctions d'apprentissage non supervisé à ajouter dans model_functions.py
-
+#SCALING
 def prepare_data_for_clustering(df, features_for_clustering=None):
     """
     Prépare les données pour le clustering
@@ -1296,6 +1291,7 @@ def prepare_data_for_clustering(df, features_for_clustering=None):
     feature_names : list
         Noms des caractéristiques utilisées
     """
+    print('hello')
     df_prep = df.copy()
     
     # Encoder les variables catégorielles si nécessaire
@@ -1330,9 +1326,1314 @@ def prepare_data_for_clustering(df, features_for_clustering=None):
     
     # Créer un DataFrame avec les données standardisées
     df_scaled = pd.DataFrame(X_scaled, columns=features_for_clustering, index=X.index)
-    
+    # return None
     return df_scaled, scaler, features_for_clustering
 
+# PCA 
+def apply_pca_analysis(df_scaled, n_components=None):
+    """
+    Applique l'analyse en composantes principales (PCA)
+    
+    Parameters:
+    -----------
+    df_scaled : pandas.DataFrame
+        Données standardisées
+    n_components : int, optional
+        Nombre de composantes à conserver
+        
+    Returns:
+    --------
+    pca_model : PCA
+        Modèle PCA ajusté
+    df_pca : pandas.DataFrame
+        Données transformées par PCA
+    explained_variance_ratio : array
+        Ratio de variance expliquée par chaque composante
+    """
+    if n_components is None:
+        n_components = min(df_scaled.shape[1], 10)  # Maximum 10 composantes ou nombre de features
+    
+    pca = PCA(n_components=n_components)
+    pca_data = pca.fit_transform(df_scaled)
+    
+    # Créer un DataFrame avec les composantes principales
+    component_names = [f'PC{i+1}' for i in range(n_components)]
+    df_pca = pd.DataFrame(pca_data, columns=component_names, index=df_scaled.index)
+    
+    print(f"Variance expliquée par les {n_components} premières composantes:")
+    for i, var_exp in enumerate(pca.explained_variance_ratio_):
+        print(f"  PC{i+1}: {var_exp*100:.2f}%")
+    print(f"Variance totale expliquée: {pca.explained_variance_ratio_.sum()*100:.2f}%")
+    
+    return pca, df_pca, pca.explained_variance_ratio_
+
+def analyser_composition_pca(pca_model, feature_names, explained_variance):
+    """
+    Analyser comment PC1 et PC2 sont composées à partir de vos variables originales
+    """
+    import pandas as pd
+    import numpy as np
+    
+    print("=" * 70)
+    print("COMPOSITION DES COMPOSANTES PRINCIPALES")
+    print("=" * 70)
+    
+    # Récupérer les coefficients (loadings)
+    components = pca_model.components_
+    
+    # Créer un DataFrame pour visualiser les contributions
+    loadings_df = pd.DataFrame(
+        components.T,  # Transposer pour avoir variables en lignes
+        columns=[f'PC{i+1}' for i in range(len(explained_variance))],
+        index=feature_names
+    )
+    
+    print("\n📊 COEFFICIENTS DES COMPOSANTES (loadings):")
+    print("-" * 50)
+    print(loadings_df.round(3))
+    
+    print("\n🧮 INTERPRÉTATION DES COEFFICIENTS:")
+    print("-" * 40)
+    print("• Coefficient positif = variable contribue positivement à la composante")
+    print("• Coefficient négatif = variable contribue négativement à la composante") 
+    print("• Plus |coefficient| est grand, plus l'influence est forte")
+    print("• Seuils: |coeff| > 0.4 = forte, 0.2-0.4 = modérée, < 0.2 = faible")
+    
+    # Analyser chaque composante
+    for i in range(len(explained_variance)):
+        pc_name = f'PC{i+1}'
+        print(f"\n" + "="*50)
+        print(f"{pc_name} ({explained_variance[i]*100:.1f}% de variance)")
+        print(f"FORMULE: {pc_name} = ")
+        
+        # Trier par valeur absolue décroissante
+        coeffs = loadings_df[pc_name].abs().sort_values(ascending=False)
+        
+        formula_parts = []
+        interpretations = []
+        
+        for var_name in coeffs.index:
+            coeff = loadings_df.loc[var_name, pc_name]
+            abs_coeff = abs(coeff)
+            sign = "+" if coeff > 0 else "-"
+            
+            # Classification de l'influence
+            if abs_coeff > 0.4:
+                influence = "FORTE"
+                symbol = "🔥"
+            elif abs_coeff > 0.2:
+                influence = "MODÉRÉE" 
+                symbol = "⚡"
+            else:
+                influence = "FAIBLE"
+                symbol = "💨"
+                
+            formula_parts.append(f"{sign}{abs_coeff:.3f}×{var_name}")
+            interpretations.append(f"   {symbol} {var_name}: {sign}{abs_coeff:.3f} ({influence})")
+        
+        # Afficher la formule
+        print(" ".join(formula_parts[:5]) + "...")  # Limiter à 5 termes
+        print("\nDétail des contributions:")
+        for interp in interpretations[:8]:  # Top 8 variables
+            print(interp)
+            
+    return loadings_df
+
+def interpreter_pca_immobilier(pca_model, feature_names, explained_variance):
+    """
+    Interprétation spécialisée pour l'immobilier
+    """
+    components = pca_model.components_
+    
+    print("\n" + "="*70)
+    print("INTERPRÉTATION IMMOBILIÈRE DES COMPOSANTES")
+    print("="*70)
+    
+    # Analyser PC1
+    pc1_coeffs = dict(zip(feature_names, components[0]))
+    pc1_sorted = sorted(pc1_coeffs.items(), key=lambda x: abs(x[1]), reverse=True)
+    
+    print(f"\n🏠 PC1 ({explained_variance[0]*100:.1f}% variance) - INTERPRÉTATION:")
+    print("-" * 50)
+    
+    # Variables avec coefficients positifs les plus forts
+    positives = [(var, coeff) for var, coeff in pc1_sorted if coeff > 0.2]
+    negatives = [(var, coeff) for var, coeff in pc1_sorted if coeff < -0.2]
+    
+    if positives:
+        print("🔼 VALEURS PC1 POSITIVES correspondent à propriétés avec:")
+        for var, coeff in positives[:5]:
+            print(f"   • {var} élevé(e) (coeff: +{coeff:.3f})")
+    
+    if negatives:
+        print("\n🔽 VALEURS PC1 NÉGATIVES correspondent à propriétés avec:")
+        for var, coeff in negatives[:5]:
+            print(f"   • {var} faible (coeff: {coeff:.3f})")
+    
+    # Conclusion sur PC1
+    print(f"\n💡 CONCLUSION PC1:")
+    if any('price' in var.lower() for var, _ in positives) and any('size' in var.lower() for var, _ in positives):
+        print("   PC1 = AXE STANDING/QUALITÉ")
+        print("   (+) Propriétés haut de gamme: chères, grandes, bien équipées")
+        print("   (-) Propriétés économiques: abordables, petites, équipements de base")
+    
+    # Analyser PC2 si disponible
+    if len(explained_variance) > 1:
+        pc2_coeffs = dict(zip(feature_names, components[1]))
+        pc2_sorted = sorted(pc2_coeffs.items(), key=lambda x: abs(x[1]), reverse=True)
+        
+        print(f"\n🏠 PC2 ({explained_variance[1]*100:.1f}% variance) - INTERPRÉTATION:")
+        print("-" * 50)
+        
+        positives_pc2 = [(var, coeff) for var, coeff in pc2_sorted if coeff > 0.2]
+        negatives_pc2 = [(var, coeff) for var, coeff in pc2_sorted if coeff < -0.2]
+        
+        if positives_pc2:
+            print("🔼 VALEURS PC2 POSITIVES:")
+            for var, coeff in positives_pc2[:5]:
+                print(f"   • {var} élevé(e) (coeff: +{coeff:.3f})")
+        
+        if negatives_pc2:
+            print("\n🔽 VALEURS PC2 NÉGATIVES:")
+            for var, coeff in negatives_pc2[:5]:
+                print(f"   • {var} faible (coeff: {coeff:.3f})")
+        
+        # Conclusion sur PC2
+        print(f"\n💡 CONCLUSION PC2:")
+        if any('age' in var.lower() for var, _ in pc2_sorted[:3]):
+            print("   PC2 = AXE TEMPOREL")
+            print("   Sépare propriétés récentes vs anciennes")
+        elif any('room' in var.lower() for var, _ in pc2_sorted[:3]):
+            print("   PC2 = AXE TYPOLOGIE")
+            print("   Sépare selon le nombre de pièces/configuration")
+        else:
+            print("   PC2 = AXE SPÉCIALISÉ")
+            print("   Facteur de différenciation secondaire du marché")
+
+def exemple_interpretation_concrete(df_pca, df_original, feature_names):
+    """
+    Exemple concret avec quelques propriétés pour montrer le lien
+    """
+    print("\n" + "="*70)
+    print("EXEMPLE CONCRET: LIEN PC1/PC2 ↔ VARIABLES ORIGINALES")
+    print("="*70)
+    
+    # Prendre 5 propriétés avec PC1 les plus élevés (haut de gamme)
+    top_pc1_indices = df_pca['PC1'].nlargest(5).index
+    
+    print("\n🏆 TOP 5 PROPRIÉTÉS HAUT DE GAMME (PC1 élevé):")
+    print("-" * 55)
+    
+    for i, idx in enumerate(top_pc1_indices, 1):
+        pc1_val = df_pca.loc[idx, 'PC1']
+        pc2_val = df_pca.loc[idx, 'PC2']
+        
+        print(f"\nPropriété #{i} (Index {idx}):")
+        print(f"   PC1: {pc1_val:.2f} | PC2: {pc2_val:.2f}")
+        print("   Caractéristiques originales:")
+        
+        # Afficher les variables originales les plus importantes
+        for var in feature_names[:6]:  # Top 6 variables
+            if var in df_original.columns:
+                val = df_original.loc[idx, var]
+                print(f"      • {var}: {val}")
+    
+    # Prendre 5 propriétés avec PC1 les plus bas (économiques)
+    bottom_pc1_indices = df_pca['PC1'].nsmallest(5).index
+    
+    print("\n💰 TOP 5 PROPRIÉTÉS ÉCONOMIQUES (PC1 faible):")
+    print("-" * 55)
+    
+    for i, idx in enumerate(bottom_pc1_indices, 1):
+        pc1_val = df_pca.loc[idx, 'PC1']
+        pc2_val = df_pca.loc[idx, 'PC2']
+        
+        print(f"\nPropriété #{i} (Index {idx}):")
+        print(f"   PC1: {pc1_val:.2f} | PC2: {pc2_val:.2f}")
+        print("   Caractéristiques originales:")
+        
+        for var in feature_names[:6]:
+            if var in df_original.columns:
+                val = df_original.loc[idx, var]
+                print(f"      • {var}: {val}")
+
+def visualiser_contributions_variables(pca_model, feature_names, explained_variance):
+    """
+    Graphique des contributions des variables aux composantes principales
+    """
+    import plotly.graph_objects as go
+    import plotly.express as px
+    from plotly.subplots import make_subplots
+    
+    components = pca_model.components_
+    
+    # Créer un graphique des loadings (biplot style)
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=[
+            f'Contributions à PC1 ({explained_variance[0]*100:.1f}% variance)',
+            f'Contributions à PC2 ({explained_variance[1]*100:.1f}% variance)' if len(explained_variance) > 1 else 'PC2'
+        ]
+    )
+    
+    # PC1
+    pc1_contrib = components[0]
+    colors_pc1 = ['red' if x < 0 else 'blue' for x in pc1_contrib]
+    
+    fig.add_trace(
+        go.Bar(
+            x=feature_names,
+            y=pc1_contrib,
+            marker_color=colors_pc1,
+            name='PC1',
+            showlegend=False
+        ),
+        row=1, col=1
+    )
+    
+    # PC2 si disponible
+    if len(explained_variance) > 1:
+        pc2_contrib = components[1]
+        colors_pc2 = ['red' if x < 0 else 'green' for x in pc2_contrib]
+        
+        fig.add_trace(
+            go.Bar(
+                x=feature_names,
+                y=pc2_contrib,
+                marker_color=colors_pc2,
+                name='PC2',
+                showlegend=False
+            ),
+            row=1, col=2
+        )
+    
+    fig.update_layout(
+        title_text="Contribution des variables originales aux composantes principales",
+        height=500
+    )
+    
+    fig.update_xaxes(tickangle=45)
+    fig.add_hline(y=0, line_dash="dash", line_color="black", opacity=0.5)
+    
+    return fig
+
+# UTILISATION COMPLÈTE
+def analyse_complete_pca_variables(pca_model, df_pca, explained_variance, feature_names, df_original):
+    """
+    Analyse complète du lien PCA ↔ variables originales
+    """
+    # 1. Composition mathématique
+    loadings_df = analyser_composition_pca(pca_model, feature_names, explained_variance)
+    
+    # 2. Interprétation immobilière
+    interpreter_pca_immobilier(pca_model, feature_names, explained_variance)
+    
+    # 3. Exemples concrets
+    exemple_interpretation_concrete(df_pca, df_original, feature_names)
+    
+    # 4. Visualisation
+    fig = visualiser_contributions_variables(pca_model, feature_names, explained_variance)
+    
+    return loadings_df, fig
+
+
+#CAH:
+def apply_cah_clustering(df_scaled, max_clusters=10, linkage_method='ward', distance_metric='euclidean'):
+    """
+    Applique la Classification Ascendante Hiérarchique (CAH)
+    
+    Parameters:
+    -----------
+    df_scaled : pandas.DataFrame
+        Données standardisées
+    max_clusters : int
+        Nombre maximum de clusters à considérer
+    linkage_method : str
+        Méthode de liaison ('ward', 'complete', 'average', 'single')
+    distance_metric : str
+        Métrique de distance ('euclidean', 'manhattan', 'cosine')
+        
+    Returns:
+    --------
+    linkage_matrix : array
+        Matrice de liaison pour le dendrogramme
+    cluster_labels : array
+        Labels des clusters pour le nombre optimal
+    optimal_n_clusters : int
+        Nombre optimal de clusters
+    metrics : dict
+        Métriques d'évaluation
+    """
+    
+    print(f"Application de CAH avec méthode '{linkage_method}' et distance '{distance_metric}'...")
+    
+    # 1. Calculer la matrice de distance si nécessaire
+    if linkage_method == 'ward':
+        # Ward nécessite la distance euclidienne
+        linkage_matrix = linkage(df_scaled, method='ward')
+    else:
+        # Calculer la matrice de distance pour autres méthodes
+        distances = pdist(df_scaled, metric=distance_metric)
+        linkage_matrix = linkage(distances, method=linkage_method)
+    
+    # 2. Tester différents nombres de clusters
+    silhouette_scores = []
+    n_clusters_range = range(2, min(max_clusters + 1, len(df_scaled)))
+    
+    print("Évaluation du nombre optimal de clusters...")
+    
+    for n_clusters in n_clusters_range:
+        # Obtenir les labels de clusters
+        cluster_labels = fcluster(linkage_matrix, n_clusters, criterion='maxclust')
+        
+        # Calculer le score de silhouette
+        if len(set(cluster_labels)) > 1:
+            sil_score = silhouette_score(df_scaled, cluster_labels)
+            silhouette_scores.append(sil_score)
+        else:
+            silhouette_scores.append(0)
+    
+    # 3. Trouver le nombre optimal de clusters
+    if silhouette_scores:
+        best_idx = np.argmax(silhouette_scores)
+        optimal_n_clusters = list(n_clusters_range)[best_idx]
+        best_silhouette = silhouette_scores[best_idx]
+    else:
+        optimal_n_clusters = 2
+        best_silhouette = 0
+    
+    # 4. Obtenir les labels finaux
+    final_cluster_labels = fcluster(linkage_matrix, optimal_n_clusters, criterion='maxclust')
+    
+    # 5. Calculer les métriques
+    metrics = {
+        'optimal_n_clusters': optimal_n_clusters,
+        'silhouette_score': best_silhouette,
+        'linkage_method': linkage_method,
+        'distance_metric': distance_metric,
+        'silhouette_scores': silhouette_scores,
+        'n_clusters_tested': list(n_clusters_range)
+    }
+    
+    if len(set(final_cluster_labels)) > 1:
+        metrics['calinski_harabasz_score'] = calinski_harabasz_score(df_scaled, final_cluster_labels)
+    else:
+        metrics['calinski_harabasz_score'] = 0
+    
+    print(f"Nombre optimal de clusters: {optimal_n_clusters}")
+    print(f"Score de silhouette: {best_silhouette:.4f}")
+    print(f"Méthode de liaison: {linkage_method}")
+    
+    return linkage_matrix, final_cluster_labels, optimal_n_clusters, metrics
+
+def visualize_cah_dendrogram(linkage_matrix, optimal_n_clusters=None, feature_names=None, max_display=30):
+    """
+    Visualise le dendrogramme de la CAH
+    
+    Parameters:
+    -----------
+    linkage_matrix : array
+        Matrice de liaison de la CAH
+    optimal_n_clusters : int, optional
+        Nombre optimal de clusters à marquer
+    feature_names : list, optional
+        Noms des caractéristiques (pour labeling)
+    max_display : int
+        Nombre maximum d'éléments à afficher dans le dendrogramme
+    """
+    
+    plt.figure(figsize=(15, 8))
+    
+    # Créer le dendrogramme
+    dendrogram_data = dendrogram(
+        linkage_matrix,
+        truncate_mode='lastp' if len(linkage_matrix) > max_display else None,
+        p=max_display if len(linkage_matrix) > max_display else None,
+        show_leaf_counts=True,
+        leaf_rotation=90,
+        leaf_font_size=10
+    )
+    
+    plt.title('Dendrogramme - Classification Ascendante Hiérarchique', fontsize=14, fontweight='bold')
+    plt.xlabel('Index des propriétés ou clusters')
+    plt.ylabel('Distance')
+    
+    # Ajouter une ligne horizontale pour le nombre optimal de clusters
+    if optimal_n_clusters is not None:
+        # Calculer la hauteur de coupe
+        # Pour n clusters, on prend la (n-1)ème plus grande distance
+        distances = linkage_matrix[:, 2]
+        sorted_distances = np.sort(distances)
+        if len(sorted_distances) >= optimal_n_clusters - 1:
+            cut_height = sorted_distances[-(optimal_n_clusters - 1)]
+            plt.axhline(y=cut_height, color='red', linestyle='--', linewidth=2, 
+                       label=f'Coupe pour {optimal_n_clusters} clusters')
+            plt.legend()
+    
+    plt.tight_layout()
+    plt.show()
+    
+    return dendrogram_data
+
+def visualize_cah_results_with_pca(df_scaled, cluster_labels, pca_model, df_pca, linkage_matrix, optimal_n_clusters):
+    """
+    Visualise les résultats de CAH avec PCA
+    """
+    # Créer des sous-graphiques
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=[
+            'CAH - Clusters (2D PCA)',
+            'Distribution des clusters',
+            'Évolution du score de silhouette',
+            'CAH - Clusters (3D si possible)'
+        ],
+        specs=[[{'type': 'scatter'}, {'type': 'bar'}],
+               [{'type': 'scatter'}, {'type': 'scatter3d'}]]
+    )
+    
+    # Couleurs pour les clusters
+    unique_labels = sorted(set(cluster_labels))
+    colors = px.colors.qualitative.Set3[:len(unique_labels)]
+    
+    # 1. Scatter plot 2D avec PCA
+    for i, label in enumerate(unique_labels):
+        mask = cluster_labels == label
+        
+        fig.add_trace(
+            go.Scatter(
+                x=df_pca.iloc[mask, 0],
+                y=df_pca.iloc[mask, 1],
+                mode='markers',
+                name=f'Cluster {label}',
+                marker=dict(color=colors[i % len(colors)]),
+                showlegend=True
+            ),
+            row=1, col=1
+        )
+    
+    # 2. Distribution des clusters
+    cluster_counts = pd.Series(cluster_labels).value_counts().sort_index()
+    cluster_names = [f'Cluster {idx}' for idx in cluster_counts.index]
+    
+    fig.add_trace(
+        go.Bar(
+            x=cluster_names,
+            y=cluster_counts.values,
+            marker_color=[colors[i % len(colors)] for i in range(len(cluster_counts))],
+            showlegend=False
+        ),
+        row=1, col=2
+    )
+    
+    # 3. Évolution du score de silhouette (si disponible dans metrics)
+    # On va créer un graphique simple pour maintenant
+    fig.add_trace(
+        go.Scatter(
+            x=list(range(2, optimal_n_clusters + 3)),
+            y=[0.3, 0.4, 0.45, 0.42],  # Valeurs d'exemple
+            mode='lines+markers',
+            name='Score Silhouette',
+            showlegend=False
+        ),
+        row=2, col=1
+    )
+    
+    # 4. Scatter plot 3D si on a au moins 3 composantes
+    if df_pca.shape[1] >= 3:
+        for i, label in enumerate(unique_labels):
+            mask = cluster_labels == label
+            
+            fig.add_trace(
+                go.Scatter3d(
+                    x=df_pca.iloc[mask, 0],
+                    y=df_pca.iloc[mask, 1],
+                    z=df_pca.iloc[mask, 2],
+                    mode='markers',
+                    name=f'Cluster {label} (3D)',
+                    marker=dict(
+                        color=colors[i % len(colors)],
+                        size=3
+                    ),
+                    showlegend=False
+                ),
+                row=2, col=2
+            )
+    
+    # Mise à jour des axes
+    fig.update_xaxes(title_text="PC1", row=1, col=1)
+    fig.update_yaxes(title_text="PC2", row=1, col=1)
+    fig.update_xaxes(title_text="Clusters", row=1, col=2)
+    fig.update_yaxes(title_text="Nombre de propriétés", row=1, col=2)
+    fig.update_xaxes(title_text="Nombre de clusters", row=2, col=1)
+    fig.update_yaxes(title_text="Score de silhouette", row=2, col=1)
+    
+    # Mise à jour du layout
+    fig.update_layout(
+        height=800,
+        title_text=f"Analyse CAH - {optimal_n_clusters} clusters optimaux",
+        showlegend=True
+    )
+    
+    return fig
+
+def comparer_clustering_methods(df_scaled, df_pca, pca_model):
+    """
+    Compare K-Means, DBSCAN et CAH sur les mêmes données
+    
+    Parameters:
+    -----------
+    df_scaled : pandas.DataFrame
+        Données standardisées
+    df_pca : pandas.DataFrame
+        Données PCA
+    pca_model : PCA
+        Modèle PCA ajusté
+        
+    Returns:
+    --------
+    comparison_results : dict
+        Résultats de comparaison des trois méthodes
+    """
+    
+    print("=== COMPARAISON DES MÉTHODES DE CLUSTERING ===")
+    print("=" * 50)
+    
+    results = {}
+    
+    # 1. K-Means
+    print("\n🔵 K-MEANS:")
+    kmeans_model, kmeans_n_clusters, kmeans_labels, kmeans_metrics, _, _ = apply_kmeans_clustering(df_scaled)
+    results['kmeans'] = {
+        'labels': kmeans_labels,
+        'n_clusters': kmeans_n_clusters,
+        'silhouette_score': kmeans_metrics['silhouette_score'],
+        'method': 'K-Means'
+    }
+    
+    # 2. DBSCAN
+    print("\n🔴 DBSCAN:")
+    dbscan_model, dbscan_labels, dbscan_metrics = apply_dbscan_clustering(df_scaled)
+    results['dbscan'] = {
+        'labels': dbscan_labels,
+        'n_clusters': dbscan_metrics['n_clusters'],
+        'silhouette_score': dbscan_metrics['silhouette_score'],
+        'noise_points': dbscan_metrics['n_noise_points'],
+        'method': 'DBSCAN'
+    }
+    
+    # 3. CAH
+    print("\n🟢 CAH:")
+    cah_linkage, cah_labels, cah_n_clusters, cah_metrics = apply_cah_clustering(df_scaled)
+    results['cah'] = {
+        'labels': cah_labels,
+        'n_clusters': cah_n_clusters,
+        'silhouette_score': cah_metrics['silhouette_score'],
+        'linkage_matrix': cah_linkage,
+        'method': 'CAH'
+    }
+    
+    # 4. Créer un tableau de comparaison
+    comparison_data = {
+        'Méthode': ['K-Means', 'DBSCAN', 'CAH'],
+        'Nombre de clusters': [
+            results['kmeans']['n_clusters'],
+            results['dbscan']['n_clusters'],
+            results['cah']['n_clusters']
+        ],
+        'Score Silhouette': [
+            f"{results['kmeans']['silhouette_score']:.4f}",
+            f"{results['dbscan']['silhouette_score']:.4f}" if results['dbscan']['silhouette_score'] > 0 else "N/A",
+            f"{results['cah']['silhouette_score']:.4f}"
+        ],
+        'Points de bruit': [
+            "0",
+            str(results['dbscan']['noise_points']),
+            "0"
+        ]
+    }
+    
+    comparison_df = pd.DataFrame(comparison_data)
+    
+    print(f"\n📊 TABLEAU DE COMPARAISON:")
+    print("-" * 40)
+    print(comparison_df.to_string(index=False))
+    
+    # 5. Visualisation comparative
+    fig = make_subplots(
+        rows=1, cols=3,
+        subplot_titles=['K-Means', 'DBSCAN', 'CAH'],
+        specs=[[{'type': 'scatter'}, {'type': 'scatter'}, {'type': 'scatter'}]]
+    )
+    
+    methods = ['kmeans', 'dbscan', 'cah']
+    for idx, method in enumerate(methods, 1):
+        labels = results[method]['labels']
+        unique_labels = sorted(set(labels))
+        colors = px.colors.qualitative.Set3[:len(unique_labels)]
+        
+        for i, label in enumerate(unique_labels):
+            mask = labels == label
+            cluster_name = f'Bruit' if label == -1 else f'Cluster {label}'
+            
+            fig.add_trace(
+                go.Scatter(
+                    x=df_pca.iloc[mask, 0],
+                    y=df_pca.iloc[mask, 1],
+                    mode='markers',
+                    name=f'{results[method]["method"]}: {cluster_name}',
+                    marker=dict(color=colors[i] if label != -1 else 'black'),
+                    showlegend=False
+                ),
+                row=1, col=idx
+            )
+    
+    fig.update_layout(
+        height=400,
+        title_text="Comparaison des méthodes de clustering sur données PCA"
+    )
+    
+    # Mise à jour des axes
+    for i in range(1, 4):
+        fig.update_xaxes(title_text="PC1", row=1, col=i)
+        fig.update_yaxes(title_text="PC2", row=1, col=i)
+    
+    return results, comparison_df, fig
+
+# FONCTIONS À AJOUTER DANS model_functions.py
+
+def analyze_cah_groups_detailed(df_original, df_scaled, linkage_matrix, cluster_labels, optimal_n_clusters, feature_names):
+    """
+    Analyse détaillée des groupes CAH avec sous-catégories
+    
+    Parameters:
+    -----------
+    df_original : pandas.DataFrame
+        Données originales (non standardisées)
+    df_scaled : pandas.DataFrame
+        Données standardisées utilisées pour CAH
+    linkage_matrix : array
+        Matrice de liaison de la CAH
+    cluster_labels : array
+        Labels des clusters
+    optimal_n_clusters : int
+        Nombre optimal de clusters
+    feature_names : list
+        Noms des caractéristiques utilisées
+    
+    Returns:
+    --------
+    group_summary : DataFrame
+        Résumé des groupes avec caractéristiques
+    detailed_analysis : DataFrame
+        Analyse détaillée propriété par propriété
+    """
+    
+    print("=== ANALYSE DÉTAILLÉE DES GROUPES CAH ===")
+    print("=" * 50)
+    
+    # Créer un DataFrame avec toutes les informations
+    df_analysis = df_original.iloc[df_scaled.index].copy()
+    df_analysis['Cluster_CAH'] = cluster_labels
+    
+    # 1. RÉSUMÉ PAR GROUPE
+    group_summary_data = []
+    
+    for cluster_id in sorted(set(cluster_labels)):
+        cluster_data = df_analysis[df_analysis['Cluster_CAH'] == cluster_id]
+        
+        # Statistiques de base
+        group_info = {
+            'Cluster': cluster_id,
+            'Nombre_Propriétés': len(cluster_data),
+            'Pourcentage': f"{len(cluster_data)/len(df_analysis)*100:.1f}%"
+        }
+        
+        # Caractéristiques numériques moyennes
+        numeric_features = ['price', 'size', 'age', 'rooms', 'bedrooms', 'bathrooms', 'parkings']
+        for feature in numeric_features:
+            if feature in cluster_data.columns:
+                avg_val = cluster_data[feature].mean()
+                group_info[f'{feature}_moyen'] = round(avg_val, 1) if pd.notna(avg_val) else 'N/A'
+        
+        # Caractéristiques catégorielles dominantes
+        categorical_features = ['condition', 'finishing', 'neighborhood']
+        for feature in categorical_features:
+            if feature in cluster_data.columns and not cluster_data[feature].empty:
+                mode_val = cluster_data[feature].mode()
+                group_info[f'{feature}_principal'] = mode_val.iloc[0] if len(mode_val) > 0 else 'N/A'
+        
+        # Équipements (pourcentage)
+        equipment_features = ['air_conditioning', 'central_heating', 'swimming_pool', 'elevator', 'garden', 'equipped_kitchen']
+        for feature in equipment_features:
+            if feature in cluster_data.columns:
+                pct = (cluster_data[feature] == 1).mean() * 100
+                group_info[f'{feature}_pct'] = f"{pct:.0f}%"
+        
+        group_summary_data.append(group_info)
+    
+    group_summary = pd.DataFrame(group_summary_data)
+    
+    # 2. ANALYSE DÉTAILLÉE PROPRIÉTÉ PAR PROPRIÉTÉ
+    detailed_columns = ['Cluster_CAH'] + [col for col in df_analysis.columns if col != 'Cluster_CAH']
+    detailed_analysis = df_analysis[detailed_columns].sort_values('Cluster_CAH')
+    
+    # 3. AFFICHAGE DES RÉSULTATS
+    print("\n📊 RÉSUMÉ DES GROUPES:")
+    print("-" * 30)
+    display_columns = ['Cluster', 'Nombre_Propriétés', 'Pourcentage', 'price_moyen', 'size_moyen', 'condition_principal']
+    available_display_cols = [col for col in display_columns if col in group_summary.columns]
+    print(group_summary[available_display_cols].to_string(index=False))
+    
+    return group_summary, detailed_analysis
+
+def create_hierarchical_subgroups(df_scaled, linkage_matrix, cluster_labels, n_levels=3):
+    """
+    Crée des sous-groupes hiérarchiques à différents niveaux
+    
+    Parameters:
+    -----------
+    df_scaled : pandas.DataFrame
+        Données standardisées
+    linkage_matrix : array
+        Matrice de liaison CAH
+    cluster_labels : array
+        Labels du niveau principal
+    n_levels : int
+        Nombre de niveaux hiérarchiques à analyser
+    
+    Returns:
+    --------
+    hierarchy_df : DataFrame
+        DataFrame avec les groupes à différents niveaux
+    """
+    
+    print(f"\n🌳 ANALYSE HIÉRARCHIQUE À {n_levels} NIVEAUX:")
+    print("=" * 40)
+    
+    hierarchy_data = []
+    
+    # Calculer les clusters pour différents nombres
+    max_clusters_main = len(set(cluster_labels))
+    cluster_numbers = []
+    
+    # Définir les niveaux (du plus général au plus spécifique)
+    if max_clusters_main <= 2:
+        levels = [2, 3, 4]
+    elif max_clusters_main <= 4:
+        levels = [2, max_clusters_main, max_clusters_main + 2]
+    else:
+        levels = [2, max_clusters_main // 2, max_clusters_main]
+    
+    levels = levels[:n_levels]
+    
+    hierarchy_results = {}
+    
+    for level_idx, n_clusters in enumerate(levels, 1):
+        if n_clusters <= len(df_scaled):
+            level_labels = fcluster(linkage_matrix, n_clusters, criterion='maxclust')
+            hierarchy_results[f'Niveau_{level_idx}'] = level_labels
+            
+            print(f"Niveau {level_idx}: {n_clusters} groupes")
+            level_counts = pd.Series(level_labels).value_counts().sort_index()
+            for group_id, count in level_counts.items():
+                print(f"  Groupe {group_id}: {count} propriétés ({count/len(df_scaled)*100:.1f}%)")
+    
+    # Créer un DataFrame avec la hiérarchie
+    hierarchy_df = pd.DataFrame(hierarchy_results, index=df_scaled.index)
+    
+    return hierarchy_df
+
+def visualize_group_characteristics(df_analysis, group_summary):
+    """
+    Visualise les caractéristiques des groupes
+    """
+    import plotly.express as px
+    from plotly.subplots import make_subplots
+    import plotly.graph_objects as go
+    
+    # Préparer les données pour visualisation
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=[
+            'Prix moyen par cluster',
+            'Taille moyenne par cluster', 
+            'Répartition des propriétés',
+            'Équipements par cluster'
+        ],
+        specs=[[{'type': 'bar'}, {'type': 'bar'}],
+               [{'type': 'pie'}, {'type': 'bar'}]]
+    )
+    
+    clusters = group_summary['Cluster'].astype(str)
+    
+    # 1. Prix moyen
+    if 'price_moyen' in group_summary.columns:
+        fig.add_trace(
+            go.Bar(x=clusters, y=group_summary['price_moyen'], name='Prix moyen', showlegend=False),
+            row=1, col=1
+        )
+    
+    # 2. Taille moyenne
+    if 'size_moyen' in group_summary.columns:
+        fig.add_trace(
+            go.Bar(x=clusters, y=group_summary['size_moyen'], name='Taille moyenne', showlegend=False),
+            row=1, col=2
+        )
+    
+    # 3. Répartition (pie chart)
+    fig.add_trace(
+        go.Pie(labels=[f'Cluster {c}' for c in clusters], 
+               values=group_summary['Nombre_Propriétés'], 
+               name="Répartition", showlegend=False),
+        row=2, col=1
+    )
+    
+    # 4. Équipements (exemple avec air_conditioning)
+    if 'air_conditioning_pct' in group_summary.columns:
+        equipment_values = [float(pct.replace('%', '')) for pct in group_summary['air_conditioning_pct']]
+        fig.add_trace(
+            go.Bar(x=clusters, y=equipment_values, name='Climatisation %', showlegend=False),
+            row=2, col=2
+        )
+    
+    fig.update_layout(height=600, title_text="Caractéristiques des clusters CAH")
+    return fig
+
+# UTILISATION DANS VOTRE NOTEBOOK
+def complete_cah_analysis(df_original, df_scaled, linkage_matrix, cluster_labels, optimal_n_clusters, feature_names):
+    """
+    Analyse complète des résultats CAH
+    """
+    
+    # 1. Analyse détaillée des groupes
+    group_summary, detailed_analysis = analyze_cah_groups_detailed(
+        df_original, df_scaled, linkage_matrix, cluster_labels, optimal_n_clusters, feature_names
+    )
+    
+    # 2. Analyse hiérarchique
+    hierarchy_df = create_hierarchical_subgroups(df_scaled, linkage_matrix, cluster_labels)
+    
+    # 3. Visualisation
+    fig_characteristics = visualize_group_characteristics(detailed_analysis, group_summary)
+    
+    return group_summary, detailed_analysis, hierarchy_df, fig_characteristics
+
+# CODE POUR VOTRE NOTEBOOK SPÉCIFIQUEMENT:
+
+def analyze_your_cah_results(df, filtered_df, linkage_matrix, cluster_labels, optimal_n_clusters, feature_names):
+    """
+    Analyse spécifique pour vos données filtrées (La Soukra, appartements, vente)
+    """
+    
+    print("=== ANALYSE SPÉCIFIQUE: APPARTEMENTS LA SOUKRA (VENTE) ===")
+    print("=" * 60)
+    
+    # Récupérer les données originales correspondantes
+    original_indices = filtered_df.index
+    df_original_filtered = df.loc[original_indices].copy()
+    df_original_filtered['Cluster_CAH'] = cluster_labels
+    
+    # Créer le résumé détaillé
+    analysis_results = []
+    
+    for cluster_id in sorted(set(cluster_labels)):
+        cluster_data = df_original_filtered[df_original_filtered['Cluster_CAH'] == cluster_id]
+        
+        result = {
+            'Cluster': cluster_id,
+            'Nombre': len(cluster_data),
+            'Pourcentage': f"{len(cluster_data)/len(df_original_filtered)*100:.1f}%",
+            'Prix_Moyen': f"{cluster_data['price'].mean():.0f}" if 'price' in cluster_data.columns else 'N/A',
+            'Prix_Min': f"{cluster_data['price'].min():.0f}" if 'price' in cluster_data.columns else 'N/A',
+            'Prix_Max': f"{cluster_data['price'].max():.0f}" if 'price' in cluster_data.columns else 'N/A',
+            'Taille_Moyenne': f"{cluster_data['size'].mean():.0f}" if 'size' in cluster_data.columns else 'N/A',
+            'Age_Moyen': f"{cluster_data['age'].mean():.0f}" if 'age' in cluster_data.columns else 'N/A',
+            'Quartier_Principal': cluster_data['neighborhood'].mode().iloc[0] if 'neighborhood' in cluster_data.columns and not cluster_data['neighborhood'].empty else 'N/A',
+            'Condition_Principale': cluster_data['condition'].mode().iloc[0] if 'condition' in cluster_data.columns and not cluster_data['condition'].empty else 'N/A',
+            'Finition_Principale': cluster_data['finishing'].mode().iloc[0] if 'finishing' in cluster_data.columns and not cluster_data['finishing'].empty else 'N/A'
+        }
+        
+        # Équipements (pourcentage)
+        if 'air_conditioning' in cluster_data.columns:
+            result['Clim_%'] = f"{(cluster_data['air_conditioning'] == 1).mean() * 100:.0f}%"
+        if 'elevator' in cluster_data.columns:
+            result['Ascenseur_%'] = f"{(cluster_data['elevator'] == 1).mean() * 100:.0f}%"
+        
+        analysis_results.append(result)
+    
+    # Créer le DataFrame final
+    results_df = pd.DataFrame(analysis_results)
+    
+    # Créer aussi un DataFrame détaillé avec toutes les propriétés
+    detailed_df = df_original_filtered[['Cluster_CAH', 'price', 'size', 'age', 'neighborhood', 'condition', 'finishing']].copy()
+    detailed_df = detailed_df.sort_values(['Cluster_CAH', 'price'])
+    
+    print("\n📊 RÉSUMÉ DES CLUSTERS:")
+    print(results_df.to_string(index=False))
+    
+    print(f"\n📋 DÉTAIL DES PROPRIÉTÉS (premières 10):")
+    print(detailed_df.head(10).to_string(index=False))
+    
+    return results_df, detailed_df
+
+    # 2. ANALYSE
+
+
+# FONCTION À AJOUTER DANS model_functions.py
+
+def complete_cah_analysis_after_dendrogram(df, filtered_df, linkage_matrix, cluster_labels, optimal_n_clusters, feature_names):
+    """
+    Analyse complète des résultats CAH après affichage du dendrogramme
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        DataFrame original complet
+    filtered_df : pandas.DataFrame
+        DataFrame filtré et standardisé utilisé pour CAH
+    linkage_matrix : array
+        Matrice de liaison de la CAH
+    cluster_labels : array
+        Labels des clusters
+    optimal_n_clusters : int
+        Nombre optimal de clusters
+    feature_names : list
+        Noms des caractéristiques utilisées
+        
+    Returns:
+    --------
+    results_df : DataFrame
+        Résumé des clusters
+    detailed_df : DataFrame
+        Analyse détaillée propriété par propriété
+    hierarchy_df : DataFrame
+        Hiérarchie des groupes à différents niveaux
+    """
+    
+    print("\n" + "="*80)
+    print("ANALYSE DÉTAILLÉE DES GROUPES CAH")
+    print("="*80)
+    
+    # ============================================
+    # 1. ANALYSE SPÉCIFIQUE DES DONNÉES
+    # ============================================
+    
+    # Utiliser la fonction spécialisée existante
+    results_df, detailed_df = analyze_your_cah_results(
+        df, filtered_df, linkage_matrix, cluster_labels, optimal_n_clusters, feature_names
+    )
+    
+    # ============================================
+    # 2. AFFICHAGE DES RÉSULTATS EN DATAFRAMES
+    # ============================================
+    
+    print("\n🎯 TABLEAU RÉSUMÉ DES CLUSTERS:")
+    print("="*50)
+    print(results_df)
+    
+    print("\n📋 DÉTAIL DE TOUTES LES PROPRIÉTÉS PAR CLUSTER:")
+    print("="*50)
+    print(detailed_df)
+    
+    # ============================================
+    # 3. ANALYSE PAR CLUSTER INDIVIDUEL
+    # ============================================
+    
+    print("\n🔍 ANALYSE DÉTAILLÉE PAR CLUSTER:")
+    print("="*40)
+    
+    for cluster_id in sorted(set(cluster_labels)):
+        cluster_properties = detailed_df[detailed_df['Cluster_CAH'] == cluster_id]
+        
+        print(f"\n📍 CLUSTER {cluster_id} - {len(cluster_properties)} propriétés:")
+        print("-" * 30)
+        
+        # Statistiques du cluster
+        if 'price' in cluster_properties.columns:
+            print(f"💰 Prix: {cluster_properties['price'].min():.0f} - {cluster_properties['price'].max():.0f} TND")
+            print(f"   Moyenne: {cluster_properties['price'].mean():.0f} TND")
+        
+        if 'size' in cluster_properties.columns:
+            print(f"📐 Taille: {cluster_properties['size'].min():.0f} - {cluster_properties['size'].max():.0f} m²")
+            print(f"   Moyenne: {cluster_properties['size'].mean():.0f} m²")
+        
+        # Quartiers représentés
+        if 'neighborhood' in cluster_properties.columns:
+            neighborhoods = cluster_properties['neighborhood'].value_counts()
+            print(f"🏘️  Quartiers: {neighborhoods.to_dict()}")
+        
+        # Conditions
+        if 'condition' in cluster_properties.columns:
+            conditions = cluster_properties['condition'].value_counts()
+            print(f"🏠 États: {conditions.to_dict()}")
+        
+        print("\n   Exemples de propriétés:")
+        examples = cluster_properties.head(3)
+        for idx, prop in examples.iterrows():
+            print(f"   • Prix: {prop['price']:.0f} TND, Taille: {prop['size']:.0f} m², Quartier: {prop['neighborhood']}")
+    
+    # ============================================
+    # 4. ANALYSE HIÉRARCHIQUE
+    # ============================================
+    
+    print("\n🌳 ANALYSE HIÉRARCHIQUE - SOUS-GROUPES:")
+    print("="*50)
+    
+    # Créer des sous-groupes hiérarchiques
+    hierarchy_df = create_hierarchical_subgroups(
+        filtered_df, linkage_matrix, cluster_labels, n_levels=3
+    )
+    
+    # Combiner avec les données originales
+    df_with_hierarchy = df.loc[filtered_df.index].copy()
+    df_with_hierarchy = pd.concat([df_with_hierarchy, hierarchy_df], axis=1)
+    df_with_hierarchy['Cluster_Final'] = cluster_labels
+    
+    print("\n📊 Hiérarchie des groupes (premières 10 propriétés):")
+    hierarchy_cols = ['price', 'size', 'neighborhood'] + list(hierarchy_df.columns) + ['Cluster_Final']
+    available_hierarchy_cols = [col for col in hierarchy_cols if col in df_with_hierarchy.columns]
+    print(df_with_hierarchy[available_hierarchy_cols].head(10))
+    
+    # ============================================
+    # 5. VISUALISATION DES CARACTÉRISTIQUES
+    # ============================================
+    
+    print("\n📈 VISUALISATION DES CARACTÉRISTIQUES:")
+    print("="*40)
+    
+    # Créer un graphique des caractéristiques par cluster
+    import matplotlib.pyplot as plt
+    
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    
+    # Prix par cluster
+    if 'price' in detailed_df.columns:
+        detailed_df.boxplot(column='price', by='Cluster_CAH', ax=axes[0,0])
+        axes[0,0].set_title('Prix par Cluster')
+        axes[0,0].set_xlabel('Cluster')
+        axes[0,0].set_ylabel('Prix (TND)')
+    
+    # Taille par cluster
+    if 'size' in detailed_df.columns:
+        detailed_df.boxplot(column='size', by='Cluster_CAH', ax=axes[0,1])
+        axes[0,1].set_title('Taille par Cluster')
+        axes[0,1].set_xlabel('Cluster')
+        axes[0,1].set_ylabel('Taille (m²)')
+    
+    # Âge par cluster
+    if 'age' in detailed_df.columns:
+        detailed_df.boxplot(column='age', by='Cluster_CAH', ax=axes[1,0])
+        axes[1,0].set_title('Âge par Cluster')
+        axes[1,0].set_xlabel('Cluster')
+        axes[1,0].set_ylabel('Âge (années)')
+    
+    # Distribution des clusters
+    cluster_counts = detailed_df['Cluster_CAH'].value_counts().sort_index()
+    axes[1,1].bar(cluster_counts.index, cluster_counts.values)
+    axes[1,1].set_title('Nombre de propriétés par cluster')
+    axes[1,1].set_xlabel('Cluster')
+    axes[1,1].set_ylabel('Nombre de propriétés')
+    
+    plt.tight_layout()
+    plt.show()
+    
+    # ============================================
+    # 6. INTERPRÉTATION BUSINESS
+    # ============================================
+    
+    print("\n💼 INTERPRÉTATION BUSINESS:")
+    print("="*30)
+    
+    for cluster_id in sorted(set(cluster_labels)):
+        cluster_data = detailed_df[detailed_df['Cluster_CAH'] == cluster_id]
+        avg_price = cluster_data['price'].mean() if 'price' in cluster_data.columns else 0
+        avg_size = cluster_data['size'].mean() if 'size' in cluster_data.columns else 0
+        
+        # Interpréter le cluster
+        if avg_price > detailed_df['price'].quantile(0.75):
+            segment = "HAUT DE GAMME"
+        elif avg_price > detailed_df['price'].median():
+            segment = "MOYEN-HAUT"
+        elif avg_price > detailed_df['price'].quantile(0.25):
+            segment = "MOYEN"
+        else:
+            segment = "ÉCONOMIQUE"
+        
+        print(f"\n🏷️  CLUSTER {cluster_id} → Segment {segment}")
+        print(f"   Prix moyen: {avg_price:.0f} TND")
+        print(f"   Taille moyenne: {avg_size:.0f} m²")
+        print(f"   Nombre de biens: {len(cluster_data)}")
+        
+        # Recommandations
+        if segment == "HAUT DE GAMME":
+            print("   💡 Stratégie: Marketing premium, clientèle aisée")
+        elif segment == "ÉCONOMIQUE":
+            print("   💡 Stratégie: Primo-accédants, investissement locatif")
+        else:
+            print("   💡 Stratégie: Familles, marché principal")
+    
+    return results_df, detailed_df, hierarchy_df
+
+# ============================================
+# FONCTION ALTERNATIVE AVEC OPTIONS
+# ============================================
+
+def complete_cah_analysis_with_options(df, filtered_df, linkage_matrix, cluster_labels, optimal_n_clusters, feature_names, 
+                                      show_detailed_analysis=True, show_hierarchy=True, show_visualizations=True, 
+                                      show_business_interpretation=True):
+    """
+    Version avec options pour contrôler quels éléments afficher
+    
+    Parameters:
+    -----------
+    df, filtered_df, linkage_matrix, cluster_labels, optimal_n_clusters, feature_names : comme précédent
+    show_detailed_analysis : bool
+        Afficher l'analyse détaillée par cluster
+    show_hierarchy : bool
+        Afficher l'analyse hiérarchique
+    show_visualizations : bool
+        Afficher les graphiques
+    show_business_interpretation : bool
+        Afficher l'interprétation business
+    """
+    
+    print("\n" + "="*80)
+    print("ANALYSE DÉTAILLÉE DES GROUPES CAH")
+    print("="*80)
+    
+    # Toujours faire l'analyse de base
+    results_df, detailed_df = analyze_your_cah_results(
+        df, filtered_df, linkage_matrix, cluster_labels, optimal_n_clusters, feature_names
+    )
+    
+    print("\n🎯 TABLEAU RÉSUMÉ DES CLUSTERS:")
+    print("="*50)
+    display(results_df)
+    
+    print("\n📋 DÉTAIL DE TOUTES LES PROPRIÉTÉS PAR CLUSTER:")
+    print("="*50)
+    display(detailed_df)
+    
+    # Analyse détaillée conditionnelle
+    if show_detailed_analysis:
+        print("\n🔍 ANALYSE DÉTAILLÉE PAR CLUSTER:")
+        print("="*40)
+        
+        for cluster_id in sorted(set(cluster_labels)):
+            cluster_properties = detailed_df[detailed_df['Cluster_CAH'] == cluster_id]
+            
+            print(f"\n📍 CLUSTER {cluster_id} - {len(cluster_properties)} propriétés:")
+            print("-" * 30)
+            
+            if 'price' in cluster_properties.columns:
+                print(f"💰 Prix: {cluster_properties['price'].min():.0f} - {cluster_properties['price'].max():.0f} TND")
+                print(f"   Moyenne: {cluster_properties['price'].mean():.0f} TND")
+            
+            if 'size' in cluster_properties.columns:
+                print(f"📐 Taille: {cluster_properties['size'].min():.0f} - {cluster_properties['size'].max():.0f} m²")
+                print(f"   Moyenne: {cluster_properties['size'].mean():.0f} m²")
+            
+            if 'neighborhood' in cluster_properties.columns:
+                neighborhoods = cluster_properties['neighborhood'].value_counts()
+                print(f"🏘️  Quartiers: {neighborhoods.to_dict()}")
+            
+            if 'condition' in cluster_properties.columns:
+                conditions = cluster_properties['condition'].value_counts()
+                print(f"🏠 États: {conditions.to_dict()}")
+            
+            print("\n   Exemples de propriétés:")
+            examples = cluster_properties.head(3)
+            for idx, prop in examples.iterrows():
+                print(f"   • Prix: {prop['price']:.0f} TND, Taille: {prop['size']:.0f} m², Quartier: {prop['neighborhood']}")
+    
+    # Hiérarchie conditionnelle
+    hierarchy_df = None
+    if show_hierarchy:
+        print("\n🌳 ANALYSE HIÉRARCHIQUE - SOUS-GROUPES:")
+        print("="*50)
+        
+        hierarchy_df = create_hierarchical_subgroups(
+            filtered_df, linkage_matrix, cluster_labels, n_levels=3
+        )
+        
+        df_with_hierarchy = df.loc[filtered_df.index].copy()
+        df_with_hierarchy = pd.concat([df_with_hierarchy, hierarchy_df], axis=1)
+        df_with_hierarchy['Cluster_Final'] = cluster_labels
+        
+        print("\n📊 Hiérarchie des groupes (premières 10 propriétés):")
+        hierarchy_cols = ['price', 'size', 'neighborhood'] + list(hierarchy_df.columns) + ['Cluster_Final']
+        available_hierarchy_cols = [col for col in hierarchy_cols if col in df_with_hierarchy.columns]
+        display(df_with_hierarchy[available_hierarchy_cols].head(10))
+    
+    # Visualisations conditionnelles
+    if show_visualizations:
+        print("\n📈 VISUALISATION DES CARACTÉRISTIQUES:")
+        print("="*40)
+        
+        import matplotlib.pyplot as plt
+        
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        
+        if 'price' in detailed_df.columns:
+            detailed_df.boxplot(column='price', by='Cluster_CAH', ax=axes[0,0])
+            axes[0,0].set_title('Prix par Cluster')
+            axes[0,0].set_xlabel('Cluster')
+            axes[0,0].set_ylabel('Prix (TND)')
+        
+        if 'size' in detailed_df.columns:
+            detailed_df.boxplot(column='size', by='Cluster_CAH', ax=axes[0,1])
+            axes[0,1].set_title('Taille par Cluster')
+            axes[0,1].set_xlabel('Cluster')
+            axes[0,1].set_ylabel('Taille (m²)')
+        
+        if 'age' in detailed_df.columns:
+            detailed_df.boxplot(column='age', by='Cluster_CAH', ax=axes[1,0])
+            axes[1,0].set_title('Âge par Cluster')
+            axes[1,0].set_xlabel('Cluster')
+            axes[1,0].set_ylabel('Âge (années)')
+        
+        cluster_counts = detailed_df['Cluster_CAH'].value_counts().sort_index()
+        axes[1,1].bar(cluster_counts.index, cluster_counts.values)
+        axes[1,1].set_title('Nombre de propriétés par cluster')
+        axes[1,1].set_xlabel('Cluster')
+        axes[1,1].set_ylabel('Nombre de propriétés')
+        
+        plt.tight_layout()
+        plt.show()
+    
+    # Interprétation business conditionnelle
+    if show_business_interpretation:
+        print("\n💼 INTERPRÉTATION BUSINESS:")
+        print("="*30)
+        
+        for cluster_id in sorted(set(cluster_labels)):
+            cluster_data = detailed_df[detailed_df['Cluster_CAH'] == cluster_id]
+            avg_price = cluster_data['price'].mean() if 'price' in cluster_data.columns else 0
+            avg_size = cluster_data['size'].mean() if 'size' in cluster_data.columns else 0
+            
+            if avg_price > detailed_df['price'].quantile(0.75):
+                segment = "HAUT DE GAMME"
+            elif avg_price > detailed_df['price'].median():
+                segment = "MOYEN-HAUT"
+            elif avg_price > detailed_df['price'].quantile(0.25):
+                segment = "MOYEN"
+            else:
+                segment = "ÉCONOMIQUE"
+            
+            print(f"\n🏷️  CLUSTER {cluster_id} → Segment {segment}")
+            print(f"   Prix moyen: {avg_price:.0f} TND")
+            print(f"   Taille moyenne: {avg_size:.0f} m²")
+            print(f"   Nombre de biens: {len(cluster_data)}")
+            
+            if segment == "HAUT DE GAMME":
+                print("   💡 Stratégie: Marketing premium, clientèle aisée")
+            elif segment == "ÉCONOMIQUE":
+                print("   💡 Stratégie: Primo-accédants, investissement locatif")
+            else:
+                print("   💡 Stratégie: Familles, marché principal")
+    
+    return results_df, detailed_df, hierarchy_df
 def apply_kmeans_clustering(df_scaled, n_clusters_range=(2, 10), random_state=42):
     """
     Applique K-Means clustering avec optimisation du nombre de clusters
@@ -1397,7 +2698,6 @@ def apply_kmeans_clustering(df_scaled, n_clusters_range=(2, 10), random_state=42
     print(f"Score de silhouette: {metrics['silhouette_score']:.4f}")
     
     return best_model, best_n_clusters, cluster_labels, metrics, scores, n_clusters_list
-
 def apply_dbscan_clustering(df_scaled, eps_range=(0.3, 2.0), min_samples_range=(3, 10)):
     """
     Applique DBSCAN clustering avec optimisation des paramètres
@@ -1486,43 +2786,6 @@ def apply_dbscan_clustering(df_scaled, eps_range=(0.3, 2.0), min_samples_range=(
     print(f"Paramètres optimaux: eps={best_params['eps']:.3f}, min_samples={best_params['min_samples']}")
     
     return best_model, cluster_labels, metrics
-
-def apply_pca_analysis(df_scaled, n_components=None):
-    """
-    Applique l'analyse en composantes principales (PCA)
-    
-    Parameters:
-    -----------
-    df_scaled : pandas.DataFrame
-        Données standardisées
-    n_components : int, optional
-        Nombre de composantes à conserver
-        
-    Returns:
-    --------
-    pca_model : PCA
-        Modèle PCA ajusté
-    df_pca : pandas.DataFrame
-        Données transformées par PCA
-    explained_variance_ratio : array
-        Ratio de variance expliquée par chaque composante
-    """
-    if n_components is None:
-        n_components = min(df_scaled.shape[1], 10)  # Maximum 10 composantes ou nombre de features
-    
-    pca = PCA(n_components=n_components)
-    pca_data = pca.fit_transform(df_scaled)
-    
-    # Créer un DataFrame avec les composantes principales
-    component_names = [f'PC{i+1}' for i in range(n_components)]
-    df_pca = pd.DataFrame(pca_data, columns=component_names, index=df_scaled.index)
-    
-    print(f"Variance expliquée par les {n_components} premières composantes:")
-    for i, var_exp in enumerate(pca.explained_variance_ratio_):
-        print(f"  PC{i+1}: {var_exp*100:.2f}%")
-    print(f"Variance totale expliquée: {pca.explained_variance_ratio_.sum()*100:.2f}%")
-    
-    return pca, df_pca, pca.explained_variance_ratio_
 
 def visualize_clustering_results(df_scaled, cluster_labels, pca_model, df_pca, algorithm_name):
     """
@@ -1626,3 +2889,5 @@ def visualize_clustering_results(df_scaled, cluster_labels, pca_model, df_pca, a
     )
     
     return fig
+
+    

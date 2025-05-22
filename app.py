@@ -8,31 +8,11 @@ import seaborn as sns
 import time
 
 # Importer les fonctions depuis le fichier model_functions.py
-from model_functions import (
-    # Fonctions d'apprentissage supervisé
-    prepare_data_for_regression,
-    regression_par_segment,
-    random_forest_par_segment,
-    xgboost_simple,
-    comparer_modeles,
-    prepare_data_for_clustering,
-    apply_dbscan_clustering,
-    visualize_clustering_results,
-    apply_pca_analysis,
-    apply_kmeans_clustering,
-    apply_dbscan_clustering,
-    impute_missing_prices,
-    impute_condition_simple,
-    impute_finishing_simple,
-    impute_property_year_age,
-    impute_binary_amenities,
-    simple_impute_rooms,
-    analyze_missing_data
-)
+from model_functions import *
 
 # Configuration de la page
 st.set_page_config(
-    page_title="Analyse Immobilière ML",
+    page_title="Analyse Immobilière ",
     page_icon="🏠",
     layout="wide",
     initial_sidebar_state="expanded"
