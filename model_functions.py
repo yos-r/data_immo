@@ -729,7 +729,19 @@ def simple_impute_rooms(df, rooms_col='rooms', area_col='size', property_type_co
     
     return df_imputed
 
-
+def quick_impute(df):
+    df=impute_missing_prices(df)
+    df=impute_condition_simple(df)
+    df=impute_finishing_simple(df)
+    df=impute_property_year_age(df)
+    df['construction_year']=2025-df['age']
+    df=impute_binary_amenities(df,['elevator','swimming_pool','central_heating','air_conditioning','equipped_kitchen','garden'])
+    df=simple_impute_rooms(df,'rooms')
+    df=simple_impute_rooms(df,'bedrooms')
+    df=simple_impute_rooms(df,'bathrooms')
+    df=simple_impute_rooms(df,'parkings')
+    return df
+    
 
 def prepare_data_for_regression(df):
     """
@@ -737,6 +749,14 @@ def prepare_data_for_regression(df):
     """
     df_prep = df.copy()
     
+     # Colonnes à exclure complètement de l'analyse (non pertinentes pour la prédiction)
+    columns_to_exclude = ['source', 'date', 'suffix', 'listing_price', 'price_ttc', 'construction_year']
+    existing_exclude_cols = [col for col in columns_to_exclude if col in df_prep.columns]
+    
+    if existing_exclude_cols:
+        df_prep = df_prep.drop(columns=existing_exclude_cols)
+        print(f"Colonnes exclues: {existing_exclude_cols}")
+        
     # Traitement des variables ordinales
     # Définir l'ordre pour chaque variable ordinale
     condition_categories = ['à rénover', 'à rafraichir', 'bonne condition', 'excellente condition', 'neuf']  
@@ -762,6 +782,7 @@ def prepare_data_for_regression(df):
             df_prep[col] = df_prep[col].astype(int)
     
     return df_prep
+
 def regression_par_segment(df, city=None, property_type=None, transaction=None, target_column='price'):
     """
     Réalise une régression linéaire simple sur un segment spécifique des données
@@ -1291,7 +1312,7 @@ def prepare_data_for_clustering(df, features_for_clustering=None):
     feature_names : list
         Noms des caractéristiques utilisées
     """
-    print('hello')
+    # print('hello')
     df_prep = df.copy()
     
     # Encoder les variables catégorielles si nécessaire

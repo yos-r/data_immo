@@ -581,196 +581,868 @@ def imputation_section(df):
 
 # Nouvelle section pour l'apprentissage supervisé
 def supervised_learning_section(df, filtered_df):
-    st.header("Modèles d'Apprentissage Supervisé")
+    st.header("🤖 Apprentissage Supervisé - Prédiction des Prix")
     
     if df is None or filtered_df is None or df.empty or filtered_df.empty:
-        st.error("Aucune donnée disponible pour l'apprentissage supervisé.")
+        st.error("❌ Aucune donnée disponible pour l'apprentissage supervisé.")
         return
     
-    # Préparer les données pour la régression
-    with st.spinner("Préparation des données pour l'apprentissage..."):
-        try:
-            df_prep = prepare_data_for_regression(filtered_df)
-            st.success("Données préparées pour l'apprentissage supervisé !")
-        except Exception as e:
-            st.error(f"Erreur lors de la préparation des données : {e}")
-            return
+    st.markdown("""
+    <div class="info-box">
+    L'apprentissage supervisé permet de prédire les prix immobiliers en analysant les relations entre 
+    les caractéristiques des propriétés et leurs prix. Trois algorithmes sont disponibles : 
+    Régression Linéaire, Random Forest et XGBoost.
+    </div>
+    """, unsafe_allow_html=True)
     
-    # Paramètres pour les modèles
-    st.subheader("Paramètres du modèle")
+    # ============================================
+    # SECTION 1: VÉRIFICATION ET PRÉPARATION DES DONNÉES
+    # ============================================
+    
+   
+    # ============================================
+    # SECTION 2: FILTRES POUR LA MODÉLISATION
+    # ============================================
+    
+    st.subheader("🔧 Configuration du Modèle")
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if 'city' in filtered_df.columns:
-            city_options = ["Toutes"] + sorted(filtered_df['city'].dropna().unique().tolist())
-            selected_city = st.selectbox("Ville pour le modèle", city_options)
+        # Filtre par ville
+        if 'city' in df.columns:
+            city_options = ["Toutes"] + sorted(df['city'].dropna().unique().tolist())
+            selected_city = st.selectbox("Ville pour le modèle", city_options, key="regression_city")
             selected_city = None if selected_city == "Toutes" else selected_city
         else:
             selected_city = None
-            st.write("Information sur la ville non disponible")
+            st.info("Information sur la ville non disponible")
     
     with col2:
-        if 'property_type' in filtered_df.columns:
-            property_options = ["Tous"] + sorted(filtered_df['property_type'].dropna().unique().tolist())
-            selected_property = st.selectbox("Type de propriété pour le modèle", property_options)
+        # Filtre par type de propriété
+        if 'property_type' in df.columns:
+            property_options = ["Tous"] + sorted(df['property_type'].dropna().unique().tolist())
+            selected_property = st.selectbox("Type de propriété pour le modèle", property_options, key="regression_property")
             selected_property = None if selected_property == "Tous" else selected_property
         else:
             selected_property = None
-            st.write("Information sur le type de propriété non disponible")
+            st.info("Information sur le type de propriété non disponible")
     
     with col3:
-        if 'transaction' in filtered_df.columns:
-            transaction_options = ["Toutes"] + sorted(filtered_df['transaction'].dropna().unique().tolist())
-            selected_transaction = st.selectbox("Type de transaction pour le modèle", transaction_options)
+        # Filtre par type de transaction
+        if 'transaction' in df.columns:
+            transaction_options = ["Toutes"] + sorted(df['transaction'].dropna().unique().tolist())
+            selected_transaction = st.selectbox("Type de transaction pour le modèle", transaction_options, key="regression_transaction")
             selected_transaction = None if selected_transaction == "Toutes" else selected_transaction
         else:
             selected_transaction = None
-            st.write("Information sur le type de transaction non disponible")
+            st.info("Information sur le type de transaction non disponible")
     
-    # Sélection du modèle
-    model_type = st.selectbox(
-        "Sélectionner le modèle",
-        ["Comparaison de modèles", "Régression Linéaire", "Random Forest", "XGBoost"]
+    # ============================================
+    # SECTION 3: SÉLECTION DE L'ALGORITHME
+    # ============================================
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        algorithm = st.selectbox(
+            "Sélectionner l'algorithme",
+            [
+                "Comparaison des 3 modèles",
+                "Régression Linéaire", 
+                "Random Forest", 
+                "XGBoost"
+            ],
+            help="Choisissez l'algorithme d'apprentissage supervisé à utiliser"
+        )
+    
+    with col2:
+        # Options avancées
+        with st.expander("⚙️ Options avancées"):
+            test_size = st.slider("Taille ensemble test (%)", 10, 40, 20) / 100
+            random_state = st.number_input("Graine aléatoire", value=42, min_value=0)
+            
+            # Paramètres spécifiques aux modèles
+            if algorithm in ["Random Forest", "Comparaison des 3 modèles"]:
+                n_estimators = st.slider("Nombre d'arbres (Random Forest)", 50, 500, 100)
+                max_depth_rf = st.slider("Profondeur max (Random Forest)", 3, 20, 10)
+            
+            if algorithm in ["XGBoost", "Comparaison des 3 modèles"]:
+                learning_rate = st.slider("Taux d'apprentissage (XGBoost)", 0.01, 0.3, 0.1)
+                max_depth_xgb = st.slider("Profondeur max (XGBoost)", 3, 10, 5)
+    
+    # ============================================
+    # SECTION 4: PRÉPARATION SÉCURISÉE DES DONNÉES
+    # ============================================
+    
+    def prepare_data_safely(df, selected_city, selected_property, selected_transaction):
+        """Préparation sécurisée des données avec gestion d'erreurs"""
+        try:
+            # Copier les données
+            df_work = df.copy()
+            
+            # Appliquer les filtres
+            filters_applied = []
+            if selected_city is not None:
+                df_work = df_work[df_work['city'] == selected_city]
+                filters_applied.append(f"Ville: {selected_city}")
+            if selected_property is not None:
+                df_work = df_work[df_work['property_type'] == selected_property]
+                filters_applied.append(f"Type: {selected_property}")
+            if selected_transaction is not None:
+                df_work = df_work[df_work['transaction'] == selected_transaction]
+                filters_applied.append(f"Transaction: {selected_transaction}")
+            
+            st.info(f"🔍 Filtres appliqués: {', '.join(filters_applied) if filters_applied else 'Aucun'}")
+            
+            # Vérifier qu'on a assez de données
+            if len(df_work) < 10:
+                st.error(f"❌ Pas assez de données après filtrage ({len(df_work)} observations). Minimum requis: 10")
+                return None, None
+            
+            # Supprimer les lignes avec prix manquant
+            df_work = df_work.dropna(subset=['price'])
+            
+            if len(df_work) < 10:
+                st.error(f"❌ Pas assez de données avec prix valides ({len(df_work)} observations). Minimum requis: 10")
+                return None, None
+            
+            # Préparer les données pour la régression
+            df_regression = prepare_data_for_regression(df_work)
+            
+            # Vérifier les valeurs manquantes dans les caractéristiques
+            numeric_cols = df_regression.select_dtypes(include=['number']).columns
+            features_cols = [col for col in numeric_cols if col != 'price']
+            
+            # Afficher les statistiques de préparation
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Observations après filtrage", len(df_work))
+            with col2:
+                st.metric("Observations avec prix valides", len(df_regression))
+            with col3:
+                st.metric("Caractéristiques disponibles", len(features_cols))
+            
+            # Traiter les valeurs manquantes dans les caractéristiques
+            missing_in_features = df_regression[features_cols].isna().sum()
+            if missing_in_features.sum() > 0:
+                # st.warning("⚠️ Valeurs manquantes détectées dans les caractéristiques. Imputation en cours...")
+                
+                # Imputation simple
+                from sklearn.impute import SimpleImputer
+                imputer = SimpleImputer(strategy='median')
+                df_regression[features_cols] = imputer.fit_transform(df_regression[features_cols])
+                
+                # st.success("✅ Imputation des valeurs manquantes terminée.")
+            
+            return df_regression, filters_applied
+            
+        except Exception as e:
+            st.error(f"❌ Erreur lors de la préparation des données: {e}")
+            return None, None
+    
+    # ============================================
+    # SECTION 5: EXÉCUTION DES MODÈLES
+    # ============================================
+    
+    if st.button("🚀 Entraîner le Modèle", type="primary"):
+        with st.spinner("🔄 Préparation des données..."):
+            df_regression, filters_applied = prepare_data_safely(
+                df, selected_city, selected_property, selected_transaction
+            )
+        
+        if df_regression is None:
+            st.stop()
+        
+        try:
+            st.success(f"✅ Données préparées: {len(df_regression)} observations prêtes pour l'entraînement")
+            
+            # ============================================
+            # EXÉCUTION SELON L'ALGORITHME SÉLECTIONNÉ
+            # ============================================
+            
+            if algorithm == "Régression Linéaire":
+                st.subheader("📈 Résultats - Régression Linéaire")
+                
+                with st.spinner("🔄 Entraînement de la régression linéaire..."):
+                    try:
+                        model, importance, metrics = regression_par_segment(
+                            df_regression,
+                            city=selected_city,
+                            property_type=selected_property,
+                            transaction=selected_transaction,
+                            target_column='price'
+                        )
+                        
+                        # Afficher les métriques
+                        display_regression_metrics(metrics, "Régression Linéaire")
+                        
+                        # NOUVEAU: Affichage détaillé des coefficients
+                        display_linear_regression_coefficients(importance, model if hasattr(model, 'intercept_') else None)
+                        
+                        # Graphique d'importance des caractéristiques
+                        display_feature_importance(importance, "Régression Linéaire", "Coefficient")
+                        
+                        # Capturer et afficher les graphiques matplotlib
+                        st.pyplot(plt.gcf())
+                        plt.close()
+                        
+                    except Exception as e:
+                        st.error(f"❌ Erreur lors de la régression linéaire: {e}")
+            
+            elif algorithm == "Random Forest":
+                st.subheader("🌲 Résultats - Random Forest")
+                
+                with st.spinner("🔄 Entraînement du Random Forest..."):
+                    try:
+                        # Modifier temporairement les paramètres dans la fonction
+                        model, importance, metrics = random_forest_par_segment(
+                            df_regression,
+                            city=selected_city,
+                            property_type=selected_property,
+                            transaction=selected_transaction,
+                            target_column='price',
+                            n_estimators=n_estimators if 'n_estimators' in locals() else 100,
+                            max_depth=max_depth_rf if 'max_depth_rf' in locals() else None
+                        )
+                        
+                        # Afficher les métriques
+                        display_regression_metrics(metrics, "Random Forest")
+                        
+                        # Graphique d'importance des caractéristiques
+                        display_feature_importance(importance, "Random Forest", "Importance")
+                        
+                        # Capturer et afficher les graphiques matplotlib
+                        st.pyplot(plt.gcf())
+                        plt.close()
+                        
+                    except Exception as e:
+                        st.error(f"❌ Erreur lors du Random Forest: {e}")
+            
+            elif algorithm == "XGBoost":
+                st.subheader("⚡ Résultats - XGBoost")
+                
+                with st.spinner("🔄 Entraînement de XGBoost..."):
+                    try:
+                        model, importance, r2_score = xgboost_simple(
+                            df_regression,
+                            city=selected_city,
+                            property_type=selected_property,
+                            transaction=selected_transaction,
+                            target_column='price'
+                        )
+                        
+                        # Afficher les métriques XGBoost
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("📊 R² Score", f"{r2_score:.4f}")
+                        with col2:
+                            st.metric("📈 Performance", get_performance_label(r2_score))
+                        with col3:
+                            st.metric("🎯 Observations", len(df_regression))
+                        
+                        # Graphique d'importance des caractéristiques
+                        display_feature_importance(importance, "XGBoost", "Importance")
+                        
+                        # Capturer et afficher les graphiques matplotlib
+                        st.pyplot(plt.gcf())
+                        plt.close()
+                        
+                    except Exception as e:
+                        st.error(f"❌ Erreur lors de XGBoost: {e}")
+            
+            else:  # Comparaison des 3 modèles
+                st.subheader("🔄 Comparaison des 3 Modèles")
+                
+                results = {}
+                errors = {}
+                
+                # Régression Linéaire
+                with st.spinner("🔄 Test Régression Linéaire..."):
+                    try:
+                        model_lr, importance_lr, metrics_lr = regression_par_segment(
+                            df_regression, selected_city, selected_property, selected_transaction
+                        )
+                        results['Régression Linéaire'] = {
+                            'model': model_lr,
+                            'importance': importance_lr,
+                            'metrics': metrics_lr,
+                            'r2': metrics_lr['test_r2'],
+                            'rmse': metrics_lr['test_rmse'],
+                            'mae': metrics_lr['test_mae']
+                        }
+                        plt.close()  # Fermer les graphiques matplotlib
+                    except Exception as e:
+                        errors['Régression Linéaire'] = str(e)
+                
+                # Random Forest
+                with st.spinner("🔄 Test Random Forest..."):
+                    try:
+                        model_rf, importance_rf, metrics_rf = random_forest_par_segment(
+                            df_regression, selected_city, selected_property, selected_transaction,
+                            n_estimators=n_estimators if 'n_estimators' in locals() else 100,
+                            max_depth=max_depth_rf if 'max_depth_rf' in locals() else None
+                        )
+                        results['Random Forest'] = {
+                            'model': model_rf,
+                            'importance': importance_rf,
+                            'metrics': metrics_rf,
+                            'r2': metrics_rf['test_r2'],
+                            'rmse': metrics_rf['test_rmse'],
+                            'mae': metrics_rf['test_mae']
+                        }
+                        plt.close()  # Fermer les graphiques matplotlib
+                    except Exception as e:
+                        errors['Random Forest'] = str(e)
+                
+                # XGBoost
+                with st.spinner("🔄 Test XGBoost..."):
+                    try:
+                        model_xgb, importance_xgb, r2_xgb = xgboost_simple(
+                            df_regression, selected_city, selected_property, selected_transaction
+                        )
+                        results['XGBoost'] = {
+                            'model': model_xgb,
+                            'importance': importance_xgb,
+                            'r2': r2_xgb,
+                            'rmse': 'N/A',  # XGBoost simple ne retourne que R2
+                            'mae': 'N/A'
+                        }
+                        plt.close()  # Fermer les graphiques matplotlib
+                    except Exception as e:
+                        errors['XGBoost'] = str(e)
+                
+                # Afficher les erreurs s'il y en a
+                if errors:
+                    st.warning("⚠️ Certains modèles ont échoué:")
+                    for model_name, error in errors.items():
+                        st.error(f"❌ {model_name}: {error}")
+                
+                # Afficher la comparaison si on a au moins un résultat
+                if results:
+                    display_model_comparison(results)
+                else:
+                    st.error("❌ Aucun modèle n'a pu être entraîné avec succès.")
+        
+        except Exception as e:
+            st.error(f"❌ Erreur générale lors de l'entraînement: {e}")
+            st.info("💡 Vérifiez la qualité de vos données et réessayez avec des filtres différents.")
+
+def display_regression_metrics(metrics, model_name):
+    """Afficher les métriques de régression de manière claire"""
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("📊 R² Test", f"{metrics['test_r2']:.4f}")
+    with col2:
+        st.metric("📈 R² Train", f"{metrics['train_r2']:.4f}")
+    with col3:
+        st.metric("📏 RMSE", f"{metrics['test_rmse']:.0f}")
+    with col4:
+        st.metric("📐 MAE", f"{metrics['test_mae']:.0f}")
+    
+    # Évaluation qualitative
+    performance = get_performance_label(metrics['test_r2'])
+    overfitting = check_overfitting(metrics['train_r2'], metrics['test_r2'])
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if metrics['test_r2'] > 0.7:
+            st.success(f"✅ {performance}")
+        elif metrics['test_r2'] > 0.5:
+            st.info(f"👍 {performance}")
+        elif metrics['test_r2'] > 0.3:
+            st.warning(f"⚠️ {performance}")
+        else:
+            st.error(f"❌ {performance}")
+    
+    with col2:
+        if overfitting:
+            st.warning("⚠️ Surapprentissage détecté")
+        else:
+            st.success("✅ Pas de surapprentissage")
+
+def display_feature_importance(importance_df, model_name, value_col):
+    """Afficher l'importance des caractéristiques avec Plotly"""
+    st.subheader(f"📊 Importance des Caractéristiques - {model_name}")
+    
+    # Prendre les 10 plus importantes
+    top_features = importance_df.head(10).copy()
+    
+    # Créer le graphique Plotly
+    if value_col == "Coefficient":
+        # Pour la régression linéaire, utiliser une échelle de couleur divergente
+        fig = px.bar(
+            top_features,
+            x=value_col,
+            y='Caractéristique',
+            orientation='h',
+            title=f"Top 10 des caractéristiques - {model_name}",
+            color=value_col,
+            color_continuous_scale='RdBu_r',
+            color_continuous_midpoint=0
+        )
+    else:
+        # Pour les autres modèles, utiliser une échelle normale
+        fig = px.bar(
+            top_features,
+            x=value_col,
+            y='Caractéristique',
+            orientation='h',
+            title=f"Top 10 des caractéristiques - {model_name}",
+            color=value_col,
+            color_continuous_scale='Viridis'
+        )
+    
+    fig.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Tableau détaillé
+    with st.expander("📋 Détail de toutes les caractéristiques"):
+        st.dataframe(importance_df, use_container_width=True)
+
+def display_model_comparison(results):
+    """Afficher la comparaison des modèles"""
+    st.subheader("🏆 Comparaison des Modèles")
+    
+    # Créer le tableau de comparaison
+    comparison_data = []
+    for model_name, result in results.items():
+        comparison_data.append({
+            'Modèle': model_name,
+            'R² Score': f"{result['r2']:.4f}",
+            'RMSE': f"{result['rmse']:.0f}" if result['rmse'] != 'N/A' else 'N/A',
+            'MAE': f"{result['mae']:.0f}" if result['mae'] != 'N/A' else 'N/A',
+            'Performance': get_performance_label(result['r2'])
+        })
+    
+    comparison_df = pd.DataFrame(comparison_data)
+    st.dataframe(comparison_df, use_container_width=True)
+    
+    # Identifier le meilleur modèle
+    best_model = max(results.items(), key=lambda x: x[1]['r2'])
+    st.success(f"🏆 **Meilleur modèle:** {best_model[0]} (R² = {best_model[1]['r2']:.4f})")
+    
+    # Graphique de comparaison
+    r2_scores = [result['r2'] for result in results.values()]
+    model_names = list(results.keys())
+    
+    fig = px.bar(
+        x=model_names,
+        y=r2_scores,
+        title="Comparaison des scores R²",
+        labels={'x': 'Modèle', 'y': 'Score R²'},
+        color=r2_scores,
+        color_continuous_scale='Viridis'
+    )
+    fig.update_layout(showlegend=False)
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Recommandations
+    st.subheader("💡 Recommandations")
+    
+    best_r2 = best_model[1]['r2']
+    if best_r2 > 0.8:
+        st.success("✅ Excellente performance ! Le modèle est très fiable pour la prédiction.")
+    elif best_r2 > 0.6:
+        st.info("👍 Bonne performance. Le modèle peut être utilisé avec confiance.")
+    elif best_r2 > 0.4:
+        st.warning("⚠️ Performance modérée. Considérez l'ajout de plus de données ou de caractéristiques.")
+    else:
+        st.error("❌ Performance faible. Revoyez la sélection des caractéristiques ou la qualité des données.")
+
+def display_linear_regression_coefficients(importance_df, model=None):
+    """Afficher les coefficients de la régression linéaire de manière détaillée"""
+    st.subheader("🔢 Coefficients de la Régression Linéaire")
+    
+    # Trier par valeur absolue décroissante pour voir les plus importants
+    coeffs_sorted = importance_df.copy()
+    coeffs_sorted['Coefficient_Abs'] = coeffs_sorted['Coefficient'].abs()
+    coeffs_sorted = coeffs_sorted.sort_values('Coefficient_Abs', ascending=False)
+    
+    # Affichage en colonnes
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.write("### 📊 Équation de Régression")
+        
+        # Construire l'équation
+        equation_parts = []
+        for idx, row in coeffs_sorted.head(10).iterrows():  # Top 10 pour lisibilité
+            coeff = row['Coefficient']
+            feature = row['Caractéristique']
+            
+            if coeff > 0:
+                sign = "+" if len(equation_parts) > 0 else ""
+                equation_parts.append(f"{sign} {coeff:.3f} × {feature}")
+            else:
+                equation_parts.append(f"- {abs(coeff):.3f} × {feature}")
+        
+        # Afficher l'équation
+        if equation_parts:
+            equation = "**Prix** = " + " ".join(equation_parts[:5])  # Limiter à 5 termes
+            if len(equation_parts) > 5:
+                equation += " + ..."
+            
+            if model and hasattr(model, 'intercept_'):
+                equation += f" + {model.intercept_:.2f}"
+            
+            st.markdown(equation)
+        
+        # Tableau détaillé des coefficients
+        st.write("### 📋 Tableau Détaillé des Coefficients")
+        
+        # Créer un DataFrame enrichi pour l'affichage
+        display_coeffs = coeffs_sorted.copy()
+        display_coeffs['Impact'] = display_coeffs['Coefficient'].apply(get_coefficient_impact)
+        display_coeffs['Coefficient_Formaté'] = display_coeffs['Coefficient'].apply(lambda x: f"{x:+.4f}")
+        display_coeffs['Interprétation'] = display_coeffs.apply(get_coefficient_interpretation, axis=1)
+        
+        # Afficher le tableau
+        st.dataframe(
+            display_coeffs[['Caractéristique', 'Coefficient_Formaté', 'Impact', 'Interprétation']],
+            use_container_width=True,
+            hide_index=True
+        )
+    
+    with col2:
+        st.write("### 🎯 Analyse des Impacts")
+        
+        # Statistiques sur les coefficients
+        positive_coeffs = coeffs_sorted[coeffs_sorted['Coefficient'] > 0]
+        negative_coeffs = coeffs_sorted[coeffs_sorted['Coefficient'] < 0]
+        
+        st.metric("📈 Variables positives", len(positive_coeffs))
+        st.metric("📉 Variables négatives", len(negative_coeffs))
+        
+        if len(positive_coeffs) > 0:
+            max_positive = positive_coeffs.iloc[0]
+            st.success(f"🔝 Plus fort impact positif:\n**{max_positive['Caractéristique']}**\n(+{max_positive['Coefficient']:.3f})")
+        
+        if len(negative_coeffs) > 0:
+            max_negative = negative_coeffs.iloc[0]
+            st.error(f"🔻 Plus fort impact négatif:\n**{max_negative['Caractéristique']}**\n({max_negative['Coefficient']:.3f})")
+        
+        # Guide d'interprétation
+        st.write("### 💡 Guide d'Interprétation")
+        st.info("""
+        **Coefficient positif (+)** : 
+        Augmente le prix
+        
+        **Coefficient négatif (-)** : 
+        Diminue le prix
+        
+        **Valeur absolue** : 
+        Force de l'impact
+        """)
+    
+    # Graphique des coefficients avec interpretation
+    st.write("### 📊 Visualisation des Coefficients")
+    
+    # Créer un graphique avec des couleurs selon l'impact
+    top_coeffs = coeffs_sorted.head(15)  # Top 15 pour la visualisation
+    
+    colors = ['green' if x > 0 else 'red' for x in top_coeffs['Coefficient']]
+    
+    fig = px.bar(
+        top_coeffs,
+        x='Coefficient',
+        y='Caractéristique',
+        orientation='h',
+        title="Impact des Caractéristiques sur le Prix (Top 15)",
+        color='Coefficient',
+        color_continuous_scale='RdBu_r',
+        color_continuous_midpoint=0,
+        hover_data={'Coefficient': ':.4f'}
     )
     
-    # Bouton pour lancer l'entraînement
-    if st.button("Entraîner le modèle"):
-        with st.spinner("Entraînement du modèle en cours..."):
-            # Vérifier qu'il y a assez de données
-            if len(df_prep) < 10:
-                st.error("Pas assez de données pour l'entraînement du modèle. Veuillez élargir les critères de sélection.")
-            else:
-                try:
-                    # Créer un conteneur pour les résultats
-                    results_container = st.container()
-                    
-                    with results_container:
-                        st.subheader(f"Résultats pour {model_type}")
-                        
-                        # Exécuter le modèle sélectionné
-                        if model_type == "Comparaison de modèles":
-                            comparison = comparer_modeles(
-                                df_prep, 
-                                city=selected_city, 
-                                property_type=selected_property, 
-                                transaction=selected_transaction
-                            )
-                            st.dataframe(comparison)
-                            
-                            try:
-                                # Convertir les figures Matplotlib en Plotly pour Streamlit
-                                st.pyplot(plt.gcf())  # Récupère la figure actuelle (courante)
-                            except Exception as e:
-                                st.warning(f"Impossible d'afficher le graphique: {e}")
-                        
-                        elif model_type == "Régression Linéaire":
-                            model, importance, metrics = regression_par_segment(
-                                df_prep, 
-                                city=selected_city, 
-                                property_type=selected_property, 
-                                transaction=selected_transaction
-                            )
-                            
-                            # Afficher les métriques
-                            st.write(f"R² (test): {metrics['test_r2']:.4f}")
-                            st.write(f"RMSE (test): {metrics['test_rmse']:.2f}")
-                            st.write(f"MAE (test): {metrics['test_mae']:.2f}")
-                            
-                            # Afficher l'importance des caractéristiques
-                            st.subheader("Importance des caractéristiques")
-                            
-                            # Créer un graphique Plotly pour l'importance des caractéristiques
-                            top_features = importance.head(10)
-                            fig = px.bar(
-                                top_features,
-                                x='Coefficient',
-                                y='Caractéristique',
-                                orientation='h',
-                                title="Top 10 des caractéristiques les plus importantes",
-                                color='Coefficient',
-                                color_continuous_scale=px.colors.diverging.RdBu,
-                                color_continuous_midpoint=0
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
-                            
-                            try:
-                                # Convertir les figures Matplotlib en Plotly pour Streamlit
-                                st.pyplot(plt.gcf())
-                            except Exception as e:
-                                st.warning(f"Impossible d'afficher le graphique: {e}")
-                        
-                        elif model_type == "Random Forest":
-                            model, importance, metrics = random_forest_par_segment(
-                                df_prep, 
-                                city=selected_city, 
-                                property_type=selected_property, 
-                                transaction=selected_transaction
-                            )
-                            
-                            # Afficher les métriques
-                            st.write(f"R² (test): {metrics['test_r2']:.4f}")
-                            st.write(f"RMSE (test): {metrics['test_rmse']:.2f}")
-                            st.write(f"MAE (test): {metrics['test_mae']:.2f}")
-                            
-                            # Afficher l'importance des caractéristiques
-                            st.subheader("Importance des caractéristiques")
-                            
-                            # Créer un graphique Plotly pour l'importance des caractéristiques
-                            top_features = importance.head(10)
-                            fig = px.bar(
-                                top_features,
-                                x='Importance',
-                                y='Caractéristique',
-                                orientation='h',
-                                title="Top 10 des caractéristiques les plus importantes",
-                                color='Importance',
-                                color_continuous_scale='Viridis'
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
-                            
-                            try:
-                                # Convertir les figures Matplotlib en Plotly pour Streamlit
-                                st.pyplot(plt.gcf())
-                            except Exception as e:
-                                st.warning(f"Impossible d'afficher le graphique: {e}")
-                        
-                        elif model_type == "XGBoost":
-                            model, importance, test_r2 = xgboost_simple(
-                                df_prep, 
-                                city=selected_city, 
-                                property_type=selected_property, 
-                                transaction=selected_transaction
-                            )
-                            
-                            # Afficher les métriques
-                            st.write(f"R² (test): {test_r2:.4f}")
-                            
-                            # Afficher l'importance des caractéristiques
-                            st.subheader("Importance des caractéristiques")
-                            
-                            # Créer un graphique Plotly pour l'importance des caractéristiques
-                            top_features = importance.head(10)
-                            fig = px.bar(
-                                top_features,
-                                x='Importance',
-                                y='Caractéristique',
-                                orientation='h',
-                                title="Top 10 des caractéristiques les plus importantes",
-                                color='Importance',
-                                color_continuous_scale='Viridis'
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
-                            
-                            try:
-                                # Convertir les figures Matplotlib en Plotly pour Streamlit
-                                st.pyplot(plt.gcf())
-                            except Exception as e:
-                                st.warning(f"Impossible d'afficher le graphique: {e}")
-                            
-                except Exception as e:
-                    st.error(f"Une erreur s'est produite lors de l'entraînement du modèle: {e}")
+    # Ajouter une ligne verticale à zéro
+    fig.add_vline(x=0, line_dash="dash", line_color="black", line_width=1)
+    
+    # Annotations pour clarification
+    fig.add_annotation(
+        x=top_coeffs['Coefficient'].max() * 0.7,
+        y=len(top_coeffs) - 1,
+        text="Augmente le prix",
+        showarrow=False,
+        font=dict(color="green", size=12)
+    )
+    
+    if top_coeffs['Coefficient'].min() < 0:
+        fig.add_annotation(
+            x=top_coeffs['Coefficient'].min() * 0.7,
+            y=len(top_coeffs) - 1,
+            text="Diminue le prix",
+            showarrow=False,
+            font=dict(color="red", size=12)
+        )
+    
+    fig.update_layout(
+        height=600,
+        yaxis={'categoryorder': 'total ascending'},
+        xaxis_title="Coefficient de Régression",
+        yaxis_title="Caractéristiques"
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Analyse contextuelle pour l'immobilier
+    st.write("### 🏠 Analyse Contextuelle Immobilier")
+    
+    # Identifier les variables immobilières classiques et leurs impacts
+    real_estate_analysis = analyze_real_estate_coefficients(coeffs_sorted)
+    
+    if real_estate_analysis:
+        for category, analysis in real_estate_analysis.items():
+            with st.expander(f"📊 {category}", expanded=False):
+                st.write(analysis)
 
+def get_coefficient_impact(coeff):
+    """Déterminer l'impact d'un coefficient"""
+    abs_coeff = abs(coeff)
+    if abs_coeff > 1000:
+        return "🔥 Très Fort"
+    elif abs_coeff > 500:
+        return "⚡ Fort"
+    elif abs_coeff > 100:
+        return "📈 Modéré"
+    elif abs_coeff > 10:
+        return "💨 Faible"
+    else:
+        return "🔸 Très Faible"
+
+def get_coefficient_interpretation(row):
+    """Interpréter un coefficient dans le contexte immobilier"""
+    coeff = row['Coefficient']
+    feature = row['Caractéristique'].lower()
+    
+    if coeff > 0:
+        direction = "augmente"
+        emoji = "📈"
+    else:
+        direction = "diminue"
+        emoji = "📉"
+    
+    # Interprétations spécifiques à l'immobilier
+    if 'size' in feature or 'surface' in feature:
+        return f"{emoji} Chaque m² supplémentaire {direction} le prix de {abs(coeff):.0f} TND"
+    elif 'room' in feature or 'piece' in feature:
+        return f"{emoji} Chaque pièce supplémentaire {direction} le prix de {abs(coeff):.0f} TND"
+    elif 'age' in feature or 'ancien' in feature:
+        return f"{emoji} Chaque année d'ancienneté {direction} le prix de {abs(coeff):.0f} TND"
+    elif 'bathroom' in feature or 'salle' in feature:
+        return f"{emoji} Chaque salle de bain supplémentaire {direction} le prix de {abs(coeff):.0f} TND"
+    elif 'parking' in feature:
+        return f"{emoji} Chaque place de parking {direction} le prix de {abs(coeff):.0f} TND"
+    elif 'elevator' in feature or 'ascenseur' in feature:
+        return f"{emoji} La présence d'un ascenseur {direction} le prix de {abs(coeff):.0f} TND"
+    elif 'condition' in feature or 'etat' in feature:
+        return f"{emoji} L'amélioration de l'état {direction} le prix de {abs(coeff):.0f} TND"
+    elif 'finishing' in feature or 'finition' in feature:
+        return f"{emoji} L'amélioration du standing {direction} le prix de {abs(coeff):.0f} TND"
+    else:
+        return f"{emoji} Cette caractéristique {direction} le prix de {abs(coeff):.0f} TND"
+
+def analyze_real_estate_coefficients(coeffs_df):
+    """Analyser les coefficients dans le contexte immobilier"""
+    analysis = {}
+    
+    # Identifier les différentes catégories
+    size_vars = coeffs_df[coeffs_df['Caractéristique'].str.contains('size|surface', case=False, na=False)]
+    room_vars = coeffs_df[coeffs_df['Caractéristique'].str.contains('room|piece|bedroom|bathroom', case=False, na=False)]
+    age_vars = coeffs_df[coeffs_df['Caractéristique'].str.contains('age|year|ancien', case=False, na=False)]
+    amenity_vars = coeffs_df[coeffs_df['Caractéristique'].str.contains('elevator|parking|garden|pool|kitchen', case=False, na=False)]
+    quality_vars = coeffs_df[coeffs_df['Caractéristique'].str.contains('condition|finishing|standing', case=False, na=False)]
+    
+    # Analyse de la superficie
+    if not size_vars.empty:
+        size_coeff = size_vars.iloc[0]['Coefficient']
+        if size_coeff > 0:
+            analysis['📐 Impact de la Superficie'] = f"""
+            ✅ **Coefficient positif**: {size_coeff:.2f} TND/m²
+            
+            📊 **Interprétation**: Chaque mètre carré supplémentaire augmente le prix de {size_coeff:.0f} TND.
+            
+            💡 **Insight Business**: La superficie est un facteur valorisant, ce qui est normal sur le marché immobilier.
+            """
+        else:
+            analysis['📐 Impact de la Superficie'] = f"""
+            ⚠️ **Coefficient négatif**: {size_coeff:.2f} TND/m²
+            
+            🤔 **Attention**: Résultat contre-intuitif qui peut indiquer un problème dans les données ou une corrélation avec d'autres variables.
+            """
+    
+    # Analyse des pièces
+    if not room_vars.empty:
+        room_analysis = "🏠 **Impact du Nombre de Pièces**:\n\n"
+        for _, room_var in room_vars.iterrows():
+            coeff = room_var['Coefficient']
+            feature = room_var['Caractéristique']
+            if coeff > 0:
+                room_analysis += f"✅ {feature}: +{coeff:.0f} TND par pièce supplémentaire\n"
+            else:
+                room_analysis += f"⚠️ {feature}: {coeff:.0f} TND (impact négatif)\n"
+        
+        analysis['🏠 Configuration des Pièces'] = room_analysis
+    
+    # Analyse de l'âge
+    if not age_vars.empty:
+        age_coeff = age_vars.iloc[0]['Coefficient']
+        if age_coeff < 0:
+            analysis['⏰ Impact de l\'Âge'] = f"""
+            ✅ **Dépréciation normale**: {age_coeff:.2f} TND/an
+            
+            📊 **Interprétation**: Chaque année d'ancienneté réduit le prix de {abs(age_coeff):.0f} TND.
+            
+            💡 **Insight**: Dépréciation annuelle de {abs(age_coeff):.0f} TND, soit {abs(age_coeff)*10:.0f} TND sur 10 ans.
+            """
+        else:
+            analysis['⏰ Impact de l\'Âge'] = f"""
+            🤔 **Coefficient positif**: {age_coeff:.2f} TND/an
+            
+            ⚠️ **Attention**: Résultat contre-intuitif. Possible effet "vintage" ou corrélation avec la localisation.
+            """
+    
+    # Analyse des équipements
+    if not amenity_vars.empty:
+        amenity_analysis = "⚡ **Impact des Équipements**:\n\n"
+        for _, amenity in amenity_vars.iterrows():
+            coeff = amenity['Coefficient']
+            feature = amenity['Caractéristique']
+            if coeff > 0:
+                amenity_analysis += f"✅ {feature}: +{coeff:.0f} TND\n"
+            else:
+                amenity_analysis += f"❌ {feature}: {coeff:.0f} TND\n"
+        
+        analysis['⚡ Équipements et Commodités'] = amenity_analysis
+    
+    # Analyse de la qualité
+    if not quality_vars.empty:
+        quality_analysis = "✨ **Impact de la Qualité**:\n\n"
+        for _, quality in quality_vars.iterrows():
+            coeff = quality['Coefficient']
+            feature = quality['Caractéristique']
+            quality_analysis += f"• {feature}: {coeff:+.0f} TND par niveau de qualité\n"
+        
+        analysis['✨ Qualité et Finitions'] = quality_analysis
+    
+    return analysis
+
+def check_overfitting(train_r2, test_r2):
+    """Vérifier s'il y a du surapprentissage"""
+    return (train_r2 - test_r2) > 0.1
+
+# ============================================
+# SECTION D'AIDE POUR L'INTERPRÉTATION
+# ============================================
+
+def add_supervised_learning_help():
+    """Section d'aide pour l'apprentissage supervisé"""
+    with st.expander("💡 Guide d'Interprétation - Apprentissage Supervisé", expanded=False):
+        st.markdown("""
+        ## 📈 Métriques de Performance
+        
+        ### **R² (Coefficient de Détermination)**
+        - **0.8-1.0** : Excellent modèle, prédictions très fiables
+        - **0.6-0.8** : Bon modèle, prédictions fiables
+        - **0.4-0.6** : Modèle modéré, prédictions acceptables
+        - **0.2-0.4** : Modèle faible, prédictions peu fiables
+        - **< 0.2** : Modèle très faible, à revoir complètement
+        
+        ### **RMSE (Root Mean Square Error)**
+        - Erreur moyenne en TND
+        - Plus faible = mieux
+        - À comparer au prix moyen des biens
+        
+        ### **MAE (Mean Absolute Error)**
+        - Erreur absolue moyenne en TND
+        - Plus faible = mieux
+        - Plus robuste aux valeurs aberrantes que RMSE
+        
+        ---
+        
+        ## 🤖 Algorithmes
+        
+        ### **📈 Régression Linéaire**
+        **Avantages :**
+        - Simple et interprétable
+        - Rapide à entraîner
+        - Coefficients indiquent l'impact de chaque variable
+        
+        **Inconvénients :**
+        - Suppose des relations linéaires
+        - Sensible aux valeurs aberrantes
+        - Peut sous-performer sur des données complexes
+        
+        ### **🌲 Random Forest**
+        **Avantages :**
+        - Gère les relations non-linéaires
+        - Robuste aux valeurs aberrantes
+        - Fournit l'importance des variables
+        - Évite souvent le surapprentissage
+        
+        **Inconvénients :**
+        - Moins interprétable
+        - Plus lent à entraîner
+        - Peut sur-ajuster avec peu de données
+        
+        ### **⚡ XGBoost**
+        **Avantages :**
+        - Très haute performance
+        - Gère bien les données manquantes
+        - Optimisations avancées
+        
+        **Inconvénients :**
+        - Complexe à paramétrer
+        - Risque de surapprentissage
+        - Moins interprétable
+        
+        ---
+        
+        ## 🚨 Signaux d'Alerte
+        
+        - **Surapprentissage** : R² train >> R² test (différence > 0.1)
+        - **Sous-apprentissage** : R² train et test très faibles
+        - **Données insuffisantes** : < 50 observations
+        - **Caractéristiques peu informatives** : Toutes les importances similaires
+        
+        ---
+        
+        ## 💡 Conseils d'Amélioration
+        
+        1. **Plus de données** : Augmenter la taille de l'échantillon
+        2. **Ingénierie des caractéristiques** : Créer de nouvelles variables
+        3. **Nettoyage des données** : Éliminer les outliers
+        4. **Segmentation** : Entraîner des modèles par segment (ville, type)
+        5. **Validation croisée** : Tester sur plusieurs échantillons
+        """)
+def get_performance_label(r2_score):
+    """Obtenir un label de performance basé sur le score R²"""
+    if r2_score > 0.8:
+        return "Excellent"
+    elif r2_score > 0.6:
+        return "Bon"
+    elif r2_score > 0.4:
+        return "Modéré"
+    elif r2_score > 0.2:
+        return "Faible"
+    else:
+        return "Très faible"
+
+def check_overfitting(train_r2, test_r2):
+    """Vérifier s'il y a du surapprentissage"""
+    return (train_r2 - test_r2) > 0.1
+
+
+# Version complète avec aide
+def supervised_learning_section_complete(df, filtered_df):
+    """Version complète avec section d'aide"""
+    supervised_learning_section(df, filtered_df)
+    add_supervised_learning_help()
+# Version complète avec aide
+
+
+    
 def unsupervised_learning_section(df, filtered_df):
     st.header("🤖 Apprentissage Non Supervisé - Clustering")
     
@@ -1854,15 +2526,14 @@ if uploaded_file is not None:
                 
             with tab4:
                 # Section d'imputation
-                updated_df = imputation_section(df)
-                if updated_df is not None:
-                    df = updated_df  # Mettre à jour le dataframe avec les données imputées
+                df = imputation_section(df)
             
             with tab5:
                 # Section d'apprentissage supervisé
-                supervised_learning_section(df, filtered_df)
+                supervised_learning_section_complete(df, filtered_df)
                 
             with tab6:
+                
                 unsupervised_learning_section(df, filtered_df)
         
     except Exception as e:
