@@ -923,6 +923,7 @@ def regression_par_segment(df, city=None, property_type=None, transaction=None, 
     }
     
     return model, feature_importance, metrics
+
 def random_forest_par_segment(df, city=None, property_type=None, transaction=None, 
                              target_column='price', n_estimators=100, max_depth=None):
     """
@@ -1362,7 +1363,7 @@ def create_price_category(df, grouping_columns=['city', 'property_type', 'transa
     def categorize_price(ratio):
         if pd.isna(ratio):
             return 1  # Prix correct par défaut si ratio manquant
-        elif ratio < 0.75 or ratio > 1.25:  # Plus de 25% d'écart (sous ou surestimé)
+        elif ratio < 0.8 or ratio > 1.2:  # Plus de 20% d'écart (sous ou surestimé)
             return 0  # Mauvaise estimation
         else:
             return 1  # Bonne estimation

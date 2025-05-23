@@ -10,7 +10,6 @@ import time
 # Importer les fonctions depuis le fichier model_functions.py
 from model_functions import *
 
-# Configuration de la page
 st.set_page_config(
     page_title="Analyse Immobilière ",
     page_icon="🏠",
@@ -18,7 +17,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS personnalisé pour améliorer l'apparence
 st.markdown("""
 <style>
     .main-header {
@@ -70,7 +68,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Header de l'application
 st.title("🏠 Analyse du Marché Immobilier Tunisien")
 
 # Introduction et contexte
@@ -111,7 +108,6 @@ def preprocess_data(df):
         except:
             pass
     
-    # Remplacer les valeurs potentiellement problématiques
     df = df.replace(['\\N', 'N/A', 'NA', ''], np.nan)
     
     # Standardiser la casse pour les colonnes catégorielles
@@ -579,7 +575,6 @@ def imputation_section(df):
         
     return df
 
-# REMPLACER VOTRE FONCTION add_price_prediction_section PAR CELLE-CI
 
 def simple_price_calculator(model, feature_names, df_regression, model_type="Régression Linéaire"):
     """
@@ -777,7 +772,7 @@ def simple_price_calculator(model, feature_names, df_regression, model_type="Ré
 
 
 def supervised_learning_section(df, filtered_df):
-    st.header("🤖 Apprentissage Supervisé - Prédiction des Prix")
+    st.header("🤖 Apprentissage Supervisé - Prédiction des Prix et Qualification de l'estimation des prix")
     
     if df is None or filtered_df is None or df.empty or filtered_df.empty:
         st.error("❌ Aucune donnée disponible pour l'apprentissage supervisé.")
@@ -786,19 +781,12 @@ def supervised_learning_section(df, filtered_df):
     st.markdown("""
     <div class="info-box">
     L'apprentissage supervisé permet de prédire les prix immobiliers en analysant les relations entre 
-    les caractéristiques des propriétés et leurs prix. Trois algorithmes sont disponibles : 
+    les caractéristiques des propriétés et leurs prix, et de qualifier la qualité d'estimation. Trois algorithmes sont disponibles : 
     Régression Linéaire, Random Forest et XGBoost.
     </div>
     """, unsafe_allow_html=True)
     
-    # ============================================
-    # SECTION 1: VÉRIFICATION ET PRÉPARATION DES DONNÉES
-    # ============================================
     
-   
-    # ============================================
-    # SECTION 2: FILTRES POUR LA MODÉLISATION
-    # ============================================
     
     st.subheader("🔧 Configuration du Modèle")
     
@@ -834,9 +822,7 @@ def supervised_learning_section(df, filtered_df):
             selected_transaction = None
             st.info("Information sur le type de transaction non disponible")
     
-    # ============================================
-    # SECTION 3: SÉLECTION DE L'ALGORITHME
-    # ============================================
+   
     
     col1, col2 = st.columns([2, 1])
     
@@ -874,16 +860,10 @@ def supervised_learning_section(df, filtered_df):
             if algorithm in ["Random Forest Classification Prix"]:
                 pass
             
-    
-    
-    # ============================================
-    # SECTION 4: PRÉPARATION SÉCURISÉE DES DONNÉES
-    # ============================================
-    
+   
     def prepare_data_safely(df, selected_city, selected_property, selected_transaction):
         """Préparation sécurisée des données avec gestion d'erreurs"""
         try:
-            # Copier les données
             df_work = df.copy()
             
             # Appliquer les filtres
@@ -946,9 +926,7 @@ def supervised_learning_section(df, filtered_df):
             st.error(f"❌ Erreur lors de la préparation des données: {e}")
             return None, None
     
-    # ============================================
-    # SECTION 5: EXÉCUTION DES MODÈLES
-    # ============================================
+   
     
     if st.button("🚀 Entraîner le Modèle", type="primary"):
         with st.spinner("🔄 Préparation des données..."):
@@ -962,9 +940,7 @@ def supervised_learning_section(df, filtered_df):
         try:
             st.success(f"✅ Données préparées: {len(df_regression)} observations prêtes pour l'entraînement")
             
-            # ============================================
-            # EXÉCUTION SELON L'ALGORITHME SÉLECTIONNÉ
-            # ============================================
+            
             
             if algorithm == "Régression Linéaire":
                 st.subheader("📈 Résultats - Régression Linéaire")
@@ -1540,78 +1516,7 @@ def supervised_learning_section(df, filtered_df):
                     except Exception as e:
                         st.error(f"❌ Erreur lors de la classification: {e}")
                         st.info("💡 Vérifiez que vos données contiennent les colonnes nécessaires (price, size, city, property_type, transaction)")
-            # else:  # Comparaison des 3 modèles
-            #     st.subheader("🔄 Comparaison des 3 Modèles")
-                
-            #     results = {}
-            #     errors = {}
-                
-            #     # Régression Linéaire
-            #     with st.spinner("🔄 Test Régression Linéaire..."):
-            #         try:
-            #             model_lr, importance_lr, metrics_lr = regression_par_segment(
-            #                 df_regression, selected_city, selected_property, selected_transaction
-            #             )
-            #             results['Régression Linéaire'] = {
-            #                 'model': model_lr,
-            #                 'importance': importance_lr,
-            #                 'metrics': metrics_lr,
-            #                 'r2': metrics_lr['test_r2'],
-            #                 'rmse': metrics_lr['test_rmse'],
-            #                 'mae': metrics_lr['test_mae']
-            #             }
-            #             plt.close()  # Fermer les graphiques matplotlib
-            #         except Exception as e:
-            #             errors['Régression Linéaire'] = str(e)
-                
-            #     # Random Forest
-            #     with st.spinner("🔄 Test Random Forest..."):
-            #         try:
-            #             model_rf, importance_rf, metrics_rf = random_forest_par_segment(
-            #                 df_regression, selected_city, selected_property, selected_transaction,
-            #                 n_estimators=n_estimators if 'n_estimators' in locals() else 100,
-            #                 max_depth=max_depth_rf if 'max_depth_rf' in locals() else None
-            #             )
-            #             results['Random Forest'] = {
-            #                 'model': model_rf,
-            #                 'importance': importance_rf,
-            #                 'metrics': metrics_rf,
-            #                 'r2': metrics_rf['test_r2'],
-            #                 'rmse': metrics_rf['test_rmse'],
-            #                 'mae': metrics_rf['test_mae']
-            #             }
-            #             plt.close()  # Fermer les graphiques matplotlib
-            #         except Exception as e:
-            #             errors['Random Forest'] = str(e)
-                
-            #     # XGBoost
-            #     with st.spinner("🔄 Test XGBoost..."):
-            #         try:
-            #             model_xgb, importance_xgb, r2_xgb = xgboost_simple(
-            #                 df_regression, selected_city, selected_property, selected_transaction
-            #             )
-            #             results['XGBoost'] = {
-            #                 'model': model_xgb,
-            #                 'importance': importance_xgb,
-            #                 'r2': r2_xgb,
-            #                 'rmse': 'N/A',  # XGBoost simple ne retourne que R2
-            #                 'mae': 'N/A'
-            #             }
-            #             plt.close()  # Fermer les graphiques matplotlib
-            #         except Exception as e:
-            #             errors['XGBoost'] = str(e)
-                
-            #     # Afficher les erreurs s'il y en a
-            #     if errors:
-            #         st.warning("⚠️ Certains modèles ont échoué:")
-            #         for model_name, error in errors.items():
-            #             st.error(f"❌ {model_name}: {error}")
-                
-            #     # Afficher la comparaison si on a au moins un résultat
-            #     if results:
-            #         display_model_comparison(results)
-            #     else:
-            #         st.error("❌ Aucun modèle n'a pu être entraîné avec succès.")
+            
         
         except Exception as e:
             st.error(f"❌ Erreur générale lors de l'entraînement: {e}")
@@ -2021,9 +1926,6 @@ def check_overfitting(train_r2, test_r2):
     """Vérifier s'il y a du surapprentissage"""
     return (train_r2 - test_r2) > 0.1
 
-# ============================================
-# SECTION D'AIDE POUR L'INTERPRÉTATION
-# ============================================
 
 def add_supervised_learning_help():
     """Section d'aide pour l'apprentissage supervisé"""
@@ -2050,9 +1952,9 @@ def add_supervised_learning_help():
         
         ---
         
-        ## 🤖 Algorithmes
+        ## Algorithmes
         
-        ### **📈 Régression Linéaire**
+        ### ** Régression Linéaire**
         **Avantages :**
         - Simple et interprétable
         - Rapide à entraîner
@@ -2063,7 +1965,7 @@ def add_supervised_learning_help():
         - Sensible aux valeurs aberrantes
         - Peut sous-performer sur des données complexes
         
-        ### **🌲 Random Forest**
+        ### ** Random Forest**
         **Avantages :**
         - Gère les relations non-linéaires
         - Robuste aux valeurs aberrantes
@@ -2075,7 +1977,7 @@ def add_supervised_learning_help():
         - Plus lent à entraîner
         - Peut sur-ajuster avec peu de données
         
-        ### **⚡ XGBoost**
+        ### ** XGBoost**
         **Avantages :**
         - Très haute performance
         - Gère bien les données manquantes
@@ -2088,7 +1990,7 @@ def add_supervised_learning_help():
         
         ---
         
-        ## 🚨 Signaux d'Alerte
+        ##  Signaux d'Alerte
         
         - **Surapprentissage** : R² train >> R² test (différence > 0.1)
         - **Sous-apprentissage** : R² train et test très faibles
@@ -2097,7 +1999,7 @@ def add_supervised_learning_help():
         
         ---
         
-        ## 💡 Conseils d'Amélioration
+        ##  Conseils d'Amélioration
         
         1. **Plus de données** : Augmenter la taille de l'échantillon
         2. **Ingénierie des caractéristiques** : Créer de nouvelles variables
@@ -2123,17 +2025,15 @@ def check_overfitting(train_r2, test_r2):
     return (train_r2 - test_r2) > 0.1
 
 
-# Version complète avec aide
 def supervised_learning_section_complete(df, filtered_df):
     """Version complète avec section d'aide"""
     supervised_learning_section(df, filtered_df)
     add_supervised_learning_help()
-# Version complète avec aide
 
 
     
 def unsupervised_learning_section(df, filtered_df):
-    st.header("🤖 Apprentissage Non Supervisé - Clustering")
+    st.header(" Apprentissage Non Supervisé - Clustering")
     
     if df is None or filtered_df is None or df.empty or filtered_df.empty:
         st.error("Aucune donnée disponible pour l'apprentissage non supervisé.")
@@ -2212,10 +2112,7 @@ def unsupervised_learning_section(df, filtered_df):
     if len(df_for_clustering) < 10:
         st.warning("⚠️ Pas assez de données pour l'analyse de clustering (minimum 10 observations). Veuillez élargir les filtres.")
         return
-    
-    # ============================================
-    # SECTION 2: SÉLECTION DES CARACTÉRISTIQUES
-    # ============================================
+   
     
     st.subheader("📊 Sélection des Caractéristiques")
     
@@ -2251,9 +2148,7 @@ def unsupervised_learning_section(df, filtered_df):
         st.warning("⚠️ Veuillez sélectionner au moins une caractéristique pour continuer.")
         return
     
-    # ============================================
-    # SECTION 3: PARAMÈTRES DES ALGORITHMES
-    # ============================================
+    
     
     st.subheader("⚙️ Configuration des Algorithmes")
     
@@ -2660,9 +2555,6 @@ def unsupervised_learning_section(df, filtered_df):
                 st.error(f"❌ Une erreur s'est produite lors de l'analyse: {e}")
                 st.info("💡 Vérifiez que vos données sont bien formatées et qu'il y a suffisamment d'observations.")
 
-# ============================================
-# FONCTIONS AUXILIAIRES POUR LES VISUALISATIONS
-# ============================================
 
 def analyze_kmeans_clusters(df_original, df_scaled, cluster_labels, feature_names):
     """Analyse détaillée des clusters K-Means"""
@@ -2996,18 +2888,12 @@ def add_clustering_help_section():
         - Un seul gros cluster : Données trop homogènes ou paramètres inadéquats
         """)
 
-# Ajouter la section d'aide à la fin de la fonction principale
 def unsupervised_learning_section_complete(df, filtered_df):
     """Version complète avec section d'aide"""
-    # Appeler la fonction principale
     unsupervised_learning_section(df, filtered_df)
     
-    # Ajouter la section d'aide
     add_clustering_help_section()
 
-# ============================================
-# FONCTIONS UTILITAIRES SUPPLÉMENTAIRES
-# ============================================
 
 def export_clustering_results(df_with_clusters, algorithm_name, cluster_labels):
     """Permettre l'export des résultats de clustering"""
@@ -3064,7 +2950,6 @@ def get_algorithm_recommendation(result):
     else:
         return "🔄 À revoir"
 # Application principale
-# Initialiser les variables de session
 if 'df_imputed' not in st.session_state:
     st.session_state['df_imputed'] = None
 
