@@ -565,7 +565,7 @@ def imputation_section(df):
                 if st.button("Utiliser les données imputées pour la suite de l'analyse"):
                     st.session_state['df_imputed'] = df_imputed
                     st.success("✅ Les données imputées sont maintenant utilisées pour l'analyse!")
-                    st.experimental_rerun()  # Réexécuter l'application pour utiliser les données imputées
+                    st.rerun()  # Réexécuter l'application pour utiliser les données imputées
                     
                 return df_imputed  # Retourner les données imputées
                 
@@ -579,7 +579,203 @@ def imputation_section(df):
         
     return df
 
-# Nouvelle section pour l'apprentissage supervisé
+# REMPLACER VOTRE FONCTION add_price_prediction_section PAR CELLE-CI
+
+def simple_price_calculator(model, feature_names, df_regression, model_type="Régression Linéaire"):
+    """
+    Calculateur de prix simple corrigé pour éviter l'erreur de dimensionnalité
+    """
+    
+    st.markdown("---")
+    st.subheader(f"🔮 Calculateur de Prix - {model_type}")
+    
+    # Obtenir un échantillon des données d'entraînement pour la structure
+    sample_row = df_regression.iloc[0:1].copy()  # Prendre la première ligne comme template
+    
+    # Statistiques pour valeurs par défaut
+    stats = df_regression.describe()
+    
+    # Interface simple en 2 colonnes
+    col1, col2 = st.columns(2)
+    
+    # Dictionnaire pour stocker les inputs utilisateur
+    user_inputs = {}
+    
+    with col1:
+        st.markdown("#### 📐 **Caractéristiques Principales**")
+        
+        # Surface
+        if 'size' in feature_names:
+            size_default = int(stats.loc['mean', 'size']) if 'size' in stats.columns else 100
+            user_inputs['size'] = st.number_input("Surface (m²)", value=size_default, min_value=20, max_value=1000, step=5, key=f"size_{model_type}")
+        
+        # Pièces
+        if 'rooms' in feature_names:
+            rooms_default = int(stats.loc['mean', 'rooms']) if 'rooms' in stats.columns else 3
+            user_inputs['rooms'] = st.number_input("Pièces", value=rooms_default, min_value=1, max_value=15, step=1, key=f"rooms_{model_type}")
+        
+        # Chambres
+        if 'bedrooms' in feature_names:
+            bedrooms_default = int(stats.loc['mean', 'bedrooms']) if 'bedrooms' in stats.columns else 2
+            user_inputs['bedrooms'] = st.number_input("Chambres", value=bedrooms_default, min_value=0, max_value=10, step=1, key=f"bedrooms_{model_type}")
+        
+        # Salles de bain
+        if 'bathrooms' in feature_names:
+            bathrooms_default = int(stats.loc['mean', 'bathrooms']) if 'bathrooms' in stats.columns else 1
+            user_inputs['bathrooms'] = st.number_input("Salles de bain", value=bathrooms_default, min_value=1, max_value=5, step=1, key=f"bathrooms_{model_type}")
+        
+        # Parkings
+        if 'parkings' in feature_names:
+            parkings_default = int(stats.loc['mean', 'parkings']) if 'parkings' in stats.columns else 1
+            user_inputs['parkings'] = st.number_input("Parkings", value=parkings_default, min_value=0, max_value=5, step=1, key=f"parkings_{model_type}")
+    
+    with col2:
+        st.markdown("#### ⭐ **Qualité & Équipements**")
+        
+        # Âge
+        if 'age' in feature_names:
+            age_default = int(stats.loc['mean', 'age']) if 'age' in stats.columns else 10
+            user_inputs['age'] = st.number_input("Âge (années)", value=age_default, min_value=0, max_value=100, step=1, key=f"age_{model_type}")
+        
+        # État
+        if 'condition' in feature_names:
+            user_inputs['condition'] = st.selectbox(
+                "État",
+                options=[0, 1, 2, 3, 4],
+                format_func=lambda x: ["À rénover", "À rafraîchir", "Bonne", "Excellente", "Neuf"][x],
+                index=2,
+                key=f"condition_{model_type}"
+            )
+        
+        # Standing
+        if 'finishing' in feature_names:
+            user_inputs['finishing'] = st.selectbox(
+                "Standing",
+                options=[0, 1, 2, 3, 4],
+                format_func=lambda x: ["Social", "Économique", "Moyen", "Haut", "Très haut"][x],
+                index=2,
+                key=f"finishing_{model_type}"
+            )
+        
+        # Équipements
+        if 'elevator' in feature_names:
+            user_inputs['elevator'] = 1 if st.checkbox("🏢 Ascenseur", key=f"elevator_{model_type}") else 0
+        
+        if 'air_conditioning' in feature_names:
+            user_inputs['air_conditioning'] = 1 if st.checkbox("❄️ Climatisation", key=f"ac_{model_type}") else 0
+        
+        if 'central_heating' in feature_names:
+            user_inputs['central_heating'] = 1 if st.checkbox("🔥 Chauffage", value=True, key=f"heating_{model_type}") else 0
+        
+        if 'swimming_pool' in feature_names:
+            user_inputs['swimming_pool'] = 1 if st.checkbox("🏊 Piscine", key=f"pool_{model_type}") else 0
+        
+        if 'garden' in feature_names:
+            user_inputs['garden'] = 1 if st.checkbox("🌳 Jardin", key=f"garden_{model_type}") else 0
+        
+        if 'equipped_kitchen' in feature_names:
+            user_inputs['equipped_kitchen'] = 1 if st.checkbox("👨‍🍳 Cuisine équipée", value=True, key=f"kitchen_{model_type}") else 0
+    
+    
+    
+    # CALCUL EN TEMPS RÉEL
+    try:
+        # Créer une copie de la ligne sample pour la prédiction
+        prediction_row = sample_row.copy()
+        
+        # Mettre à jour avec les valeurs de l'utilisateur
+        for feature, value in user_inputs.items():
+            if feature in prediction_row.columns:
+                prediction_row[feature] = value
+        
+        # Supprimer la colonne 'price' si elle existe (c'est la variable cible)
+        if 'price' in prediction_row.columns:
+            prediction_row = prediction_row.drop('price', axis=1)
+        
+        # S'assurer que toutes les features attendues sont présentes
+        missing_features = set(feature_names) - set(prediction_row.columns)
+        if missing_features:
+            st.warning(f"⚠️ Features manquantes: {missing_features}")
+            # Ajouter les features manquantes avec des valeurs par défaut
+            for feature in missing_features:
+                prediction_row[feature] = 0
+        
+        # Réorganiser les colonnes dans l'ordre attendu par le modèle
+        prediction_row = prediction_row[feature_names]
+        
+        # Prédiction
+        predicted_price = model.predict(prediction_row)[0]
+        
+        # AFFICHAGE DU PRIX
+        st.markdown("### 💰 **Prix Estimé**")
+        
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            padding: 1.5rem;
+            border-radius: 10px;
+            text-align: center;
+            color: white;
+            margin: 1rem 0;
+        ">
+            <h1 style="margin: 0; font-size: 2.5rem; color: white;">
+                {predicted_price:,.0f} TND
+            </h1>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Métriques rapides
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if 'size' in user_inputs and user_inputs['size'] > 0:
+                price_per_sqm = predicted_price / user_inputs['size']
+                st.metric("Prix/m²", f"{price_per_sqm:,.0f} TND")
+        
+        with col2:
+            if 'price' in df_regression.columns:
+                market_avg = df_regression['price'].mean()
+                diff_pct = ((predicted_price - market_avg) / market_avg) * 100
+                st.metric("vs Marché", f"{diff_pct:+.1f}%")
+        
+        with col3:
+            lower = predicted_price * 0.9
+            upper = predicted_price * 1.1
+            st.metric("Fourchette", f"{lower:,.0f} - {upper:,.0f}")
+        
+        # Debug info (optionnel)
+        with st.expander("🔧 Info Debug", expanded=False):
+            st.write(f"Features utilisées: {len(feature_names)}")
+            st.write(f"Valeurs utilisateur: {len(user_inputs)}")
+            st.write(f"Shape finale: {prediction_row.shape}")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("**Inputs utilisateur:**")
+                for k, v in user_inputs.items():
+                    st.write(f"• {k}: {v}")
+            
+            with col2:
+                st.write("**Features modèle:**")
+                for i, feature in enumerate(feature_names[:10]):  # Afficher les 10 premières
+                    st.write(f"• {feature}")
+                if len(feature_names) > 10:
+                    st.write(f"... et {len(feature_names)-10} autres")
+    
+    except Exception as e:
+        st.error(f"❌ Erreur dans le calcul: {str(e)}")
+        
+        # Debug détaillé
+        st.write("**Debug détaillé:**")
+        st.write(f"• Modèle attend: {len(feature_names)} features")
+        st.write(f"• Features: {feature_names}")
+        st.write(f"• User inputs: {len(user_inputs)} valeurs")
+        
+        if 'prediction_row' in locals():
+            st.write(f"• Prediction row shape: {prediction_row.shape}")
+            st.write(f"• Prediction row columns: {list(prediction_row.columns)}")
+
+
 def supervised_learning_section(df, filtered_df):
     st.header("🤖 Apprentissage Supervisé - Prédiction des Prix")
     
@@ -648,10 +844,9 @@ def supervised_learning_section(df, filtered_df):
         algorithm = st.selectbox(
             "Sélectionner l'algorithme",
             [
-                "Comparaison des 3 modèles",
                 "Régression Linéaire", 
-                "Random Forest", 
-                "XGBoost"
+                "Random Forest Classification Prix",  # ← Nouvelle option
+                "XGBoost Classification Prix"  # ← Nouvelle option
             ],
             help="Choisissez l'algorithme d'apprentissage supervisé à utiliser"
         )
@@ -667,9 +862,19 @@ def supervised_learning_section(df, filtered_df):
                 n_estimators = st.slider("Nombre d'arbres (Random Forest)", 50, 500, 100)
                 max_depth_rf = st.slider("Profondeur max (Random Forest)", 3, 20, 10)
             
-            if algorithm in ["XGBoost", "Comparaison des 3 modèles"]:
-                learning_rate = st.slider("Taux d'apprentissage (XGBoost)", 0.01, 0.3, 0.1)
-                max_depth_xgb = st.slider("Profondeur max (XGBoost)", 3, 10, 5)
+            if algorithm in ["XGBoost Classification Prix", "Comparaison des 3 modèles"]:
+                optimize_params = st.checkbox("Optimiser les hyperparamètres", value=False, 
+                                                    help="Recherche automatique des meilleurs paramètres",
+                                                    key="xgb_class_optimize")
+               
+                threshold_low = st.slider("Seuil sous-estimation", 0.5, 0.9, 0.75, 0.05,
+                                                key="xgb_class_threshold_low")
+                threshold_high = st.slider("Seuil surestimation", 1.1, 1.5, 1.25, 0.05,
+                                                key="xgb_class_threshold_high")
+            if algorithm in ["Random Forest Classification Prix"]:
+                pass
+            
+    
     
     # ============================================
     # SECTION 4: PRÉPARATION SÉCURISÉE DES DONNÉES
@@ -787,142 +992,626 @@ def supervised_learning_section(df, filtered_df):
                         st.pyplot(plt.gcf())
                         plt.close()
                         
+                        # Enlever la variable cible ET les variables catégorielles non désirées
+                        
                     except Exception as e:
                         st.error(f"❌ Erreur lors de la régression linéaire: {e}")
-            
-            elif algorithm == "Random Forest":
-                st.subheader("🌲 Résultats - Random Forest")
+                            
+            elif algorithm == "Random Forest Classification Prix":
+                st.subheader("🌲 Classification Random Forest - Estimation des Prix")
                 
-                with st.spinner("🔄 Entraînement du Random Forest..."):
+                # Options spécifiques à la classification Random Forest
+                with st.expander("⚙️ Options de Classification Random Forest", expanded=True):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        optimize_params_rf = st.checkbox("Optimiser les hyperparamètres", value=False, 
+                                                        help="Recherche automatique des meilleurs paramètres",
+                                                        key="rf_class_optimize")
+                        test_size_rf = st.slider("Taille ensemble test (%)", 10, 40, 20, 
+                                                key="rf_class_test_size") / 100
+                    
+                    with col2:
+                        n_estimators_rf = st.slider("Nombre d'arbres", 50, 500, 200,
+                                                key="rf_class_n_estimators")
+                        max_depth_rf = st.slider("Profondeur max", 3, 20, 10,
+                                                key="rf_class_max_depth")
+                        threshold_low_rf = st.slider("Seuil sous-estimation", 0.5, 0.9, 0.75, 0.05,
+                                                    key="rf_class_threshold_low")
+                        threshold_high_rf = st.slider("Seuil surestimation", 1.1, 1.5, 1.25, 0.05,
+                                                    key="rf_class_threshold_high")
+                
+                with st.spinner("🔄 Création des catégories de prix..."):
                     try:
-                        # Modifier temporairement les paramètres dans la fonction
-                        model, importance, metrics = random_forest_par_segment(
-                            df_regression,
+                        # 1. Créer les catégories de prix
+                        st.info("📊 Étape 1: Création des catégories de prix basées sur le marché local")
+                        
+                        # Modifier la fonction create_price_category pour utiliser les seuils personnalisés
+                        def create_price_category_custom(df, grouping_columns=['city', 'property_type', 'transaction'], 
+                                                    low_threshold=threshold_low_rf, high_threshold=threshold_high_rf):
+                            df_category = df.copy()
+                            df_category['price_per_sqm'] = df_category['price'] / df_category['size']
+                            
+                            # Filtrer les valeurs aberrantes
+                            price_per_sqm_median = df_category['price_per_sqm'].median()
+                            price_per_sqm_std = df_category['price_per_sqm'].std()
+                            lower_bound = price_per_sqm_median - 3 * price_per_sqm_std
+                            upper_bound = price_per_sqm_median + 3 * price_per_sqm_std
+                            valid_mask = (df_category['price_per_sqm'] >= lower_bound) & (df_category['price_per_sqm'] <= upper_bound)
+                            df_category = df_category[valid_mask]
+                            
+                            # Calculer moyennes par marché local
+                            market_avg_price_per_sqm = df_category.groupby(grouping_columns)['price_per_sqm'].mean().reset_index()
+                            market_avg_price_per_sqm.columns = list(grouping_columns) + ['market_avg_price_per_sqm']
+                            df_category = df_category.merge(market_avg_price_per_sqm, on=grouping_columns, how='left')
+                            df_category['price_ratio'] = df_category['price_per_sqm'] / df_category['market_avg_price_per_sqm']
+                            
+                            # Catégorisation binaire avec seuils personnalisés
+                            def categorize_price(ratio):
+                                if pd.isna(ratio):
+                                    return 1
+                                elif ratio < low_threshold or ratio > high_threshold:
+                                    return 0  # Mal estimé
+                                else:
+                                    return 1  # Bien estimé
+                            
+                            df_category['price_category'] = df_category['price_ratio'].apply(categorize_price)
+                            category_labels = {0: 'Mal estimé', 1: 'Bien estimé'}
+                            df_category['price_category_label'] = df_category['price_category'].map(category_labels)
+                            
+                            return df_category
+                        
+                        df_with_categories = create_price_category_custom(df_regression)
+                        
+                        # Afficher les statistiques des catégories
+                        category_stats = df_with_categories['price_category'].value_counts().sort_index()
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.metric("Observations avec catégories", len(df_with_categories))
+                        with col2:
+                            mal_estime = category_stats.get(0, 0)
+                            st.metric("Mal estimé", f"{mal_estime} ({mal_estime/len(df_with_categories)*100:.1f}%)")
+                        with col3:
+                            bien_estime = category_stats.get(1, 0)
+                            st.metric("Bien estimé", f"{bien_estime} ({bien_estime/len(df_with_categories)*100:.1f}%)")
+                        
+                        st.success("✅ Catégories de prix créées avec succès")
+                        
+                        # 2. Classification Random Forest
+                        st.info("🌲 Étape 2: Classification avec Random Forest")
+                        
+                        model, results, feature_importance = random_forest_price_classification(
+                            df_with_categories,
                             city=selected_city,
                             property_type=selected_property,
                             transaction=selected_transaction,
-                            target_column='price',
-                            n_estimators=n_estimators if 'n_estimators' in locals() else 100,
-                            max_depth=max_depth_rf if 'max_depth_rf' in locals() else None
+                            test_size=test_size_rf,
+                            optimize_params=optimize_params_rf,
+                            n_estimators=n_estimators_rf,
+                            max_depth=max_depth_rf
                         )
                         
-                        # Afficher les métriques
-                        display_regression_metrics(metrics, "Random Forest")
+                        # 3. Afficher les résultats
+                        st.subheader("📊 Résultats de la Classification Random Forest")
                         
-                        # Graphique d'importance des caractéristiques
-                        display_feature_importance(importance, "Random Forest", "Importance")
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("🎯 Précision (Test)", f"{results['test_accuracy']:.3f}")
+                        with col2:
+                            st.metric("📈 Précision (Train)", f"{results['train_accuracy']:.3f}")
+                        with col3:
+                            n_test = len(results['y_test'])
+                            st.metric("🔢 Échantillon test", n_test)
+                        with col4:
+                            overfitting = results['train_accuracy'] - results['test_accuracy']
+                            if overfitting > 0.1:
+                                st.metric("⚠️ Surapprentissage", f"+{overfitting:.3f}", delta_color="off")
+                            else:
+                                st.metric("✅ Généralisation", f"{overfitting:.3f}")
                         
-                        # Capturer et afficher les graphiques matplotlib
-                        st.pyplot(plt.gcf())
-                        plt.close()
+                        # 4. Matrice de confusion
+                        st.subheader("🔍 Matrice de Confusion")
                         
-                    except Exception as e:
-                        st.error(f"❌ Erreur lors du Random Forest: {e}")
-            
-            elif algorithm == "XGBoost":
-                st.subheader("⚡ Résultats - XGBoost")
-                
-                with st.spinner("🔄 Entraînement de XGBoost..."):
-                    try:
-                        model, importance, r2_score = xgboost_simple(
-                            df_regression,
-                            city=selected_city,
-                            property_type=selected_property,
-                            transaction=selected_transaction,
-                            target_column='price'
+                        cm = results['confusion_matrix']
+                        class_names = results['class_names']
+                        
+                        # Créer une heatmap avec plotly
+                        fig_cm = px.imshow(
+                            cm,
+                            x=class_names,
+                            y=class_names,
+                            color_continuous_scale='Greens',  # Vert pour Random Forest
+                            text_auto=True,
+                            title="Matrice de Confusion - Random Forest",
+                            labels=dict(x="Prédiction", y="Réalité")
                         )
+                        fig_cm.update_layout(width=400, height=400)
                         
-                        # Afficher les métriques XGBoost
+                        col1, col2 = st.columns([1, 2])
+                        with col1:
+                            st.plotly_chart(fig_cm, use_container_width=True)
+                        
+                        with col2:
+                            st.write("**Interprétation de la matrice :**")
+                            
+                            # Calculs détaillés
+                            tn, fp, fn, tp = cm.ravel()
+                            precision_0 = tn / (tn + fn) if (tn + fn) > 0 else 0
+                            precision_1 = tp / (tp + fp) if (tp + fp) > 0 else 0
+                            recall_0 = tn / (tn + fp) if (tn + fp) > 0 else 0
+                            recall_1 = tp / (tp + fn) if (tp + fn) > 0 else 0
+                            
+                            st.write(f"• **Vrais Positifs (Bien classé comme Bien):** {tp}")
+                            st.write(f"• **Vrais Négatifs (Mal classé comme Mal):** {tn}")
+                            st.write(f"• **Faux Positifs (Mal classé comme Bien):** {fp}")
+                            st.write(f"• **Faux Négatifs (Bien classé comme Mal):** {fn}")
+                            
+                            st.write("**Métriques par classe :**")
+                            st.write(f"• **Précision 'Mal estimé':** {precision_0:.3f}")
+                            st.write(f"• **Précision 'Bien estimé':** {precision_1:.3f}")
+                            st.write(f"• **Rappel 'Mal estimé':** {recall_0:.3f}")
+                            st.write(f"• **Rappel 'Bien estimé':** {recall_1:.3f}")
+                        
+                        # 5. Importance des caractéristiques
+                        st.subheader("📈 Importance des Caractéristiques - Random Forest")
+                        
+                        # Graphique d'importance
+                        top_features = feature_importance.head(10)
+                        fig_importance = px.bar(
+                            top_features,
+                            x='Importance',
+                            y='Caractéristique',
+                            orientation='h',
+                            title="Top 10 des caractéristiques les plus importantes (Random Forest)",
+                            color='Importance',
+                            color_continuous_scale='Greens'
+                        )
+                        fig_importance.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
+                        st.plotly_chart(fig_importance, use_container_width=True)
+                        
+                        # Tableau détaillé
+                        with st.expander("📋 Tableau complet des caractéristiques"):
+                            st.dataframe(feature_importance, use_container_width=True)
+                        
+                        # 6. Rapport de classification détaillé
+                        st.subheader("📋 Rapport de Classification Détaillé")
+                        
+                        # Convertir le rapport en DataFrame pour un meilleur affichage
+                        report_dict = results['classification_report']
+                        report_df = pd.DataFrame(report_dict).transpose()
+                        
+                        # Formater les valeurs numériques
+                        for col in ['precision', 'recall', 'f1-score']:
+                            if col in report_df.columns:
+                                report_df[col] = report_df[col].apply(lambda x: f"{x:.3f}" if isinstance(x, (int, float)) else x)
+                        
+                        st.dataframe(report_df, use_container_width=True)
+                        
+                        # 7. Analyse des erreurs spécifique à Random Forest
+                        with st.spinner("Analyse des erreurs en cours..."):
+                            try:
+                                # Utiliser la version sécurisée
+                                error_data, error_types = analyze_misclassified_properties_rf_safe(
+                                    df_with_categories, results, model, feature_importance
+                                )
+                                
+                                if len(error_data) > 0:
+                                    st.subheader("❌ Analyse des Erreurs - Random Forest")
+                                    
+                                    col1, col2 = st.columns(2)
+                                    
+                                    with col1:
+                                        st.metric("Total d'erreurs", len(error_data))
+                                        st.metric("Taux d'erreur", f"{len(error_data)/len(results['y_test'])*100:.1f}%")
+                                    
+                                    with col2:
+                                        # Types d'erreurs
+                                        if len(error_types) > 0:
+                                            for _, row in error_types.iterrows():
+                                                st.write(f"• {row['actual_label']} → {row['predicted_label']}: {row['count']} cas")
+                                    
+                                    # Exemples d'erreurs avec probabilités Random Forest
+                                    st.write("**Exemples de propriétés mal classifiées (avec probabilités) :**")
+                                    
+                                    if len(error_data) > 0:
+                                        # Afficher le DataFrame des erreurs
+                                        display_cols = ['actual_label', 'predicted_label', 'prob_mal_estime', 'prob_bien_estime', 'confiance']
+                                        st.dataframe(error_data[display_cols].round(3), use_container_width=True)
+                                        
+                                        # Analyse de confiance
+                                        st.write("**Analyse de confiance des erreurs :**")
+                                        low_confidence = (error_data['confiance'] < 0.6).sum()
+                                        high_confidence = (error_data['confiance'] > 0.8).sum()
+                                        
+                                        col1, col2, col3 = st.columns(3)
+                                        with col1:
+                                            st.metric("Erreurs peu confiantes (<60%)", low_confidence)
+                                        with col2:
+                                            st.metric("Erreurs très confiantes (>80%)", high_confidence)
+                                        with col3:
+                                            avg_confidence = error_data['confiance'].mean()
+                                            st.metric("Confiance moyenne", f"{avg_confidence:.3f}")
+                                        
+                                        # Graphique de distribution des confiances
+                                        fig_conf = px.histogram(
+                                            error_data, 
+                                            x='confiance', 
+                                            nbins=10,
+                                            title="Distribution des niveaux de confiance des erreurs",
+                                            labels={'confiance': 'Niveau de confiance', 'count': 'Nombre d\'erreurs'}
+                                        )
+                                        st.plotly_chart(fig_conf, use_container_width=True)
+                                else:
+                                    st.success("🎉 Aucune erreur de classification ! Modèle parfait.")
+                                    
+                            except Exception as e:
+                                st.warning(f"⚠️ Impossible d'analyser les erreurs en détail: {e}")
+                                st.info("Le modèle fonctionne correctement, mais l'analyse détaillée des erreurs n'est pas disponible.")
+                                
+                                # Afficher quand même les métriques de base
+                                total_errors = (results['y_test'] != results['y_test_pred']).sum()
+                                error_rate = total_errors / len(results['y_test']) * 100
+                                
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.metric("Total d'erreurs (estimation)", total_errors)
+                                with col2:
+                                    st.metric("Taux d'erreur (estimation)", f"{error_rate:.1f}%")
+                        # 8. Spécificités Random Forest
+                        st.subheader("🌲 Spécificités Random Forest")
+                        
+                        # Information sur les arbres
                         col1, col2, col3 = st.columns(3)
                         with col1:
-                            st.metric("📊 R² Score", f"{r2_score:.4f}")
+                            st.metric("Nombre d'arbres", model.n_estimators)
                         with col2:
-                            st.metric("📈 Performance", get_performance_label(r2_score))
+                            st.metric("Profondeur max", model.max_depth if model.max_depth else "Illimitée")
                         with col3:
-                            st.metric("🎯 Observations", len(df_regression))
+                            # Calcul de la diversité des arbres (estimation)
+                            oob_score = getattr(model, 'oob_score_', None)
+                            if oob_score:
+                                st.metric("Score OOB", f"{oob_score:.3f}")
+                            else:
+                                st.metric("Features par arbre", f"{model.max_features}")
                         
-                        # Graphique d'importance des caractéristiques
-                        display_feature_importance(importance, "XGBoost", "Importance")
+                        # 9. Recommandations spécifiques Random Forest
+                        st.subheader("💡 Recommandations - Random Forest")
                         
-                        # Capturer et afficher les graphiques matplotlib
-                        st.pyplot(plt.gcf())
-                        plt.close()
+                        accuracy = results['test_accuracy']
+                        if accuracy > 0.9:
+                            st.success("🌟 **Excellent modèle Random Forest** : Très haute précision, excellent pour la production")
+                            st.info("🎯 Random Forest excelle avec cette complexité de données")
+                        elif accuracy > 0.8:
+                            st.success("✅ **Bon modèle Random Forest** : Précision satisfaisante, robuste aux outliers")
+                            st.info("🌲 La nature d'ensemble de Random Forest apporte de la stabilité")
+                        elif accuracy > 0.7:
+                            st.warning("⚠️ **Modèle Random Forest acceptable** : Pourrait bénéficier de plus d'arbres ou de données")
+                        elif accuracy > 0.6:
+                            st.warning("🔄 **Random Forest à améliorer** : Augmenter n_estimators ou optimiser les paramètres")
+                        else:
+                            st.error("❌ **Random Forest insuffisant** : Revoir la sélection des features ou les seuils")
+                        
+                        # Conseils d'amélioration spécifiques Random Forest
+                        st.write("**Conseils d'amélioration Random Forest :**")
+                        st.write("• Augmenter le nombre d'arbres (n_estimators) pour plus de stabilité")
+                        st.write("• Ajuster max_depth pour contrôler le surapprentissage")
+                        st.write("• Utiliser max_features='sqrt' pour plus de diversité entre arbres")
+                        st.write("• Considérer min_samples_split et min_samples_leaf pour la régularisation")
+                        st.write("• Random Forest est naturellement robuste aux valeurs aberrantes")
+                        
+                        # Comparaison avec XGBoost
+                        st.info("🔄 **Comparaison avec XGBoost** : Random Forest est généralement plus stable et moins sensible aux hyperparamètres, tandis que XGBoost peut atteindre une précision légèrement supérieure avec un bon tuning.")
                         
                     except Exception as e:
-                        st.error(f"❌ Erreur lors de XGBoost: {e}")
-            
-            else:  # Comparaison des 3 modèles
-                st.subheader("🔄 Comparaison des 3 Modèles")
+                        st.error(f"❌ Erreur lors de la classification Random Forest: {e}")
+                        st.info("💡 Vérifiez que vos données contiennent les colonnes nécessaires (price, size, city, property_type, transaction)")
+                        
+                        # Debug info pour Random Forest
+                        if 'df_regression' in locals():
+                            st.write("**Colonnes disponibles dans df_regression:**")
+                            st.write(list(df_regression.columns))
+                        
+                        # Suggestions spécifiques
+                        st.write("**Suggestions de débogage Random Forest :**")
+                        st.write("• Vérifiez que le dataset contient assez d'observations (>100 recommandé)")
+                        st.write("• Assurez-vous que les seuils ne créent pas de classes déséquilibrées")
+                        st.write("• Random Forest nécessite des variables numériques bien encodées")
+            elif algorithm == "XGBoost Classification Prix":
+                st.subheader("🎯 Classification XGBoost - Estimation des Prix")
                 
-                results = {}
-                errors = {}
-                
-                # Régression Linéaire
-                with st.spinner("🔄 Test Régression Linéaire..."):
+               
+                with st.spinner("🔄 Création des catégories de prix..."):
                     try:
-                        model_lr, importance_lr, metrics_lr = regression_par_segment(
-                            df_regression, selected_city, selected_property, selected_transaction
+                        # 1. Créer les catégories de prix
+                        st.info("📊 Étape 1: Création des catégories de prix basées sur le marché local")
+                        
+                        # Modifier la fonction create_price_category pour utiliser les seuils personnalisés
+                        def create_price_category_custom(df, grouping_columns=['city', 'property_type', 'transaction'], 
+                                                    low_threshold=threshold_low, high_threshold=threshold_high):
+                            df_category = df.copy()
+                            df_category['price_per_sqm'] = df_category['price'] / df_category['size']
+                            
+                            # Filtrer les valeurs aberrantes
+                            price_per_sqm_median = df_category['price_per_sqm'].median()
+                            price_per_sqm_std = df_category['price_per_sqm'].std()
+                            lower_bound = price_per_sqm_median - 3 * price_per_sqm_std
+                            upper_bound = price_per_sqm_median + 3 * price_per_sqm_std
+                            valid_mask = (df_category['price_per_sqm'] >= lower_bound) & (df_category['price_per_sqm'] <= upper_bound)
+                            df_category = df_category[valid_mask]
+                            
+                            # Calculer moyennes par marché local
+                            market_avg_price_per_sqm = df_category.groupby(grouping_columns)['price_per_sqm'].mean().reset_index()
+                            market_avg_price_per_sqm.columns = list(grouping_columns) + ['market_avg_price_per_sqm']
+                            df_category = df_category.merge(market_avg_price_per_sqm, on=grouping_columns, how='left')
+                            df_category['price_ratio'] = df_category['price_per_sqm'] / df_category['market_avg_price_per_sqm']
+                            
+                            # Catégorisation binaire avec seuils personnalisés
+                            def categorize_price(ratio):
+                                if pd.isna(ratio):
+                                    return 1
+                                elif ratio < low_threshold or ratio > high_threshold:
+                                    return 0  # Mal estimé
+                                else:
+                                    return 1  # Bien estimé
+                            
+                            df_category['price_category'] = df_category['price_ratio'].apply(categorize_price)
+                            category_labels = {0: 'Mal estimé', 1: 'Bien estimé'}
+                            df_category['price_category_label'] = df_category['price_category'].map(category_labels)
+                            
+                            return df_category
+                        
+                        df_with_categories = create_price_category_custom(df_regression)
+                        
+                        # Afficher les statistiques des catégories
+                        category_stats = df_with_categories['price_category'].value_counts().sort_index()
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.metric("Observations avec catégories", len(df_with_categories))
+                        with col2:
+                            mal_estime = category_stats.get(0, 0)
+                            st.metric("Mal estimé", f"{mal_estime} ({mal_estime/len(df_with_categories)*100:.1f}%)")
+                        with col3:
+                            bien_estime = category_stats.get(1, 0)
+                            st.metric("Bien estimé", f"{bien_estime} ({bien_estime/len(df_with_categories)*100:.1f}%)")
+                        
+                        st.success("✅ Catégories de prix créées avec succès")
+                        
+                        # 2. Classification XGBoost
+                        st.info("🤖 Étape 2: Classification avec XGBoost")
+                        
+                        model, results, feature_importance = xgboost_price_classification(
+                            df_with_categories,
+                            city=selected_city,
+                            property_type=selected_property,
+                            transaction=selected_transaction,
+                            test_size=test_size,
+                            optimize_params=optimize_params
                         )
-                        results['Régression Linéaire'] = {
-                            'model': model_lr,
-                            'importance': importance_lr,
-                            'metrics': metrics_lr,
-                            'r2': metrics_lr['test_r2'],
-                            'rmse': metrics_lr['test_rmse'],
-                            'mae': metrics_lr['test_mae']
-                        }
-                        plt.close()  # Fermer les graphiques matplotlib
-                    except Exception as e:
-                        errors['Régression Linéaire'] = str(e)
-                
-                # Random Forest
-                with st.spinner("🔄 Test Random Forest..."):
-                    try:
-                        model_rf, importance_rf, metrics_rf = random_forest_par_segment(
-                            df_regression, selected_city, selected_property, selected_transaction,
-                            n_estimators=n_estimators if 'n_estimators' in locals() else 100,
-                            max_depth=max_depth_rf if 'max_depth_rf' in locals() else None
+                        
+                        # 3. Afficher les résultats
+                        st.subheader("📊 Résultats de la Classification")
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("🎯 Précision (Test)", f"{results['test_accuracy']:.3f}")
+                        with col2:
+                            st.metric("📈 Précision (Train)", f"{results['train_accuracy']:.3f}")
+                        with col3:
+                            n_test = len(results['y_test'])
+                            st.metric("🔢 Échantillon test", n_test)
+                        with col4:
+                            overfitting = results['train_accuracy'] - results['test_accuracy']
+                            if overfitting > 0.1:
+                                st.metric("⚠️ Surapprentissage", f"+{overfitting:.3f}", delta_color="off")
+                            else:
+                                st.metric("✅ Généralisation", f"{overfitting:.3f}")
+                        
+                        # 4. Matrice de confusion
+                        st.subheader("🔍 Matrice de Confusion")
+                        
+                        cm = results['confusion_matrix']
+                        class_names = results['class_names']
+                        
+                        # Créer une heatmap avec plotly
+                        fig_cm = px.imshow(
+                            cm,
+                            x=class_names,
+                            y=class_names,
+                            color_continuous_scale='Blues',
+                            text_auto=True,
+                            title="Matrice de Confusion",
+                            labels=dict(x="Prédiction", y="Réalité")
                         )
-                        results['Random Forest'] = {
-                            'model': model_rf,
-                            'importance': importance_rf,
-                            'metrics': metrics_rf,
-                            'r2': metrics_rf['test_r2'],
-                            'rmse': metrics_rf['test_rmse'],
-                            'mae': metrics_rf['test_mae']
-                        }
-                        plt.close()  # Fermer les graphiques matplotlib
-                    except Exception as e:
-                        errors['Random Forest'] = str(e)
-                
-                # XGBoost
-                with st.spinner("🔄 Test XGBoost..."):
-                    try:
-                        model_xgb, importance_xgb, r2_xgb = xgboost_simple(
-                            df_regression, selected_city, selected_property, selected_transaction
+                        fig_cm.update_layout(width=400, height=400)
+                        
+                        col1, col2 = st.columns([1, 2])
+                        with col1:
+                            st.plotly_chart(fig_cm, use_container_width=True)
+                        
+                        with col2:
+                            st.write("**Interprétation de la matrice :**")
+                            
+                            # Calculs détaillés
+                            tn, fp, fn, tp = cm.ravel()
+                            precision_0 = tn / (tn + fn) if (tn + fn) > 0 else 0
+                            precision_1 = tp / (tp + fp) if (tp + fp) > 0 else 0
+                            recall_0 = tn / (tn + fp) if (tn + fp) > 0 else 0
+                            recall_1 = tp / (tp + fn) if (tp + fn) > 0 else 0
+                            
+                            st.write(f"• **Vrais Positifs (Bien classé comme Bien):** {tp}")
+                            st.write(f"• **Vrais Négatifs (Mal classé comme Mal):** {tn}")
+                            st.write(f"• **Faux Positifs (Mal classé comme Bien):** {fp}")
+                            st.write(f"• **Faux Négatifs (Bien classé comme Mal):** {fn}")
+                            
+                            st.write("**Métriques par classe :**")
+                            st.write(f"• **Précision 'Mal estimé':** {precision_0:.3f}")
+                            st.write(f"• **Précision 'Bien estimé':** {precision_1:.3f}")
+                            st.write(f"• **Rappel 'Mal estimé':** {recall_0:.3f}")
+                            st.write(f"• **Rappel 'Bien estimé':** {recall_1:.3f}")
+                        
+                        # 5. Importance des caractéristiques
+                        st.subheader("📈 Importance des Caractéristiques")
+                        
+                        # Graphique d'importance
+                        top_features = feature_importance.head(10)
+                        fig_importance = px.bar(
+                            top_features,
+                            x='Importance',
+                            y='Caractéristique',
+                            orientation='h',
+                            title="Top 10 des caractéristiques les plus importantes",
+                            color='Importance',
+                            color_continuous_scale='Viridis'
                         )
-                        results['XGBoost'] = {
-                            'model': model_xgb,
-                            'importance': importance_xgb,
-                            'r2': r2_xgb,
-                            'rmse': 'N/A',  # XGBoost simple ne retourne que R2
-                            'mae': 'N/A'
-                        }
-                        plt.close()  # Fermer les graphiques matplotlib
+                        fig_importance.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
+                        st.plotly_chart(fig_importance, use_container_width=True)
+                        
+                        # Tableau détaillé
+                        with st.expander("📋 Tableau complet des caractéristiques"):
+                            st.dataframe(feature_importance, use_container_width=True)
+                        
+                        # 6. Rapport de classification détaillé
+                        st.subheader("📋 Rapport de Classification Détaillé")
+                        
+                        # Convertir le rapport en DataFrame pour un meilleur affichage
+                        report_dict = results['classification_report']
+                        report_df = pd.DataFrame(report_dict).transpose()
+                        
+                        # Formater les valeurs numériques
+                        for col in ['precision', 'recall', 'f1-score']:
+                            if col in report_df.columns:
+                                report_df[col] = report_df[col].apply(lambda x: f"{x:.3f}" if isinstance(x, (int, float)) else x)
+                        
+                        st.dataframe(report_df, use_container_width=True)
+                        
+                        # 7. Analyse des erreurs
+                        # if st.button("🔍 Analyser les Erreurs de Classification", key="xgb_class_analyze_errors"):
+                        with st.spinner("Analyse des erreurs en cours..."):
+                            error_data, error_types = analyze_misclassified_properties(
+                                df_with_categories, results, model, feature_importance
+                            )
+                            
+                            if len(error_data) > 0:
+                                st.subheader("❌ Analyse des Erreurs")
+                                
+                                col1, col2 = st.columns(2)
+                                
+                                with col1:
+                                    st.metric("Total d'erreurs", len(error_data))
+                                    st.metric("Taux d'erreur", f"{len(error_data)/len(results['y_test'])*100:.1f}%")
+                                
+                                with col2:
+                                    # Types d'erreurs
+                                    for _, row in error_types.iterrows():
+                                        st.write(f"• {row['actual_label']} → {row['predicted_label']}: {row['count']} cas")
+                                
+                                # Exemples d'erreurs
+                                st.write("**Exemples de propriétés mal classifiées :**")
+                                examples = error_data.head(5)[['price', 'size', 'price_ratio', 'market_avg_price_per_sqm', 
+                                                            'actual_label', 'predicted_label']]
+                                st.dataframe(examples, use_container_width=True)
+                            else:
+                                st.success("🎉 Aucune erreur de classification ! Modèle parfait.")
+                        
+                        # 8. Recommandations
+                        st.subheader("💡 Recommandations")
+                        
+                        accuracy = results['test_accuracy']
+                        if accuracy > 0.9:
+                            st.success("🌟 **Excellent modèle** : Très haute précision, déployable en production")
+                        elif accuracy > 0.8:
+                            st.success("✅ **Bon modèle** : Précision satisfaisante, peut être utilisé avec confiance")
+                        elif accuracy > 0.7:
+                            st.warning("⚠️ **Modèle acceptable** : Précision correcte, mais des améliorations sont possibles")
+                        elif accuracy > 0.6:
+                            st.warning("🔄 **Modèle à améliorer** : Précision faible, revoir les données ou les paramètres")
+                        else:
+                            st.error("❌ **Modèle insuffisant** : Précision très faible, revoir complètement l'approche")
+                        
+                        # Conseils d'amélioration
+                        st.write("**Conseils d'amélioration :**")
+                        st.write("• Ajuster les seuils de catégorisation selon votre connaissance du marché")
+                        st.write("• Ajouter plus de données pour les segments sous-représentés")
+                        st.write("• Considérer des variables supplémentaires (localisation précise, équipements...)")
+                        st.write("• Essayer l'optimisation des hyperparamètres si non activée")
+                        
                     except Exception as e:
-                        errors['XGBoost'] = str(e)
+                        st.error(f"❌ Erreur lors de la classification: {e}")
+                        st.info("💡 Vérifiez que vos données contiennent les colonnes nécessaires (price, size, city, property_type, transaction)")
+            # else:  # Comparaison des 3 modèles
+            #     st.subheader("🔄 Comparaison des 3 Modèles")
                 
-                # Afficher les erreurs s'il y en a
-                if errors:
-                    st.warning("⚠️ Certains modèles ont échoué:")
-                    for model_name, error in errors.items():
-                        st.error(f"❌ {model_name}: {error}")
+            #     results = {}
+            #     errors = {}
                 
-                # Afficher la comparaison si on a au moins un résultat
-                if results:
-                    display_model_comparison(results)
-                else:
-                    st.error("❌ Aucun modèle n'a pu être entraîné avec succès.")
+            #     # Régression Linéaire
+            #     with st.spinner("🔄 Test Régression Linéaire..."):
+            #         try:
+            #             model_lr, importance_lr, metrics_lr = regression_par_segment(
+            #                 df_regression, selected_city, selected_property, selected_transaction
+            #             )
+            #             results['Régression Linéaire'] = {
+            #                 'model': model_lr,
+            #                 'importance': importance_lr,
+            #                 'metrics': metrics_lr,
+            #                 'r2': metrics_lr['test_r2'],
+            #                 'rmse': metrics_lr['test_rmse'],
+            #                 'mae': metrics_lr['test_mae']
+            #             }
+            #             plt.close()  # Fermer les graphiques matplotlib
+            #         except Exception as e:
+            #             errors['Régression Linéaire'] = str(e)
+                
+            #     # Random Forest
+            #     with st.spinner("🔄 Test Random Forest..."):
+            #         try:
+            #             model_rf, importance_rf, metrics_rf = random_forest_par_segment(
+            #                 df_regression, selected_city, selected_property, selected_transaction,
+            #                 n_estimators=n_estimators if 'n_estimators' in locals() else 100,
+            #                 max_depth=max_depth_rf if 'max_depth_rf' in locals() else None
+            #             )
+            #             results['Random Forest'] = {
+            #                 'model': model_rf,
+            #                 'importance': importance_rf,
+            #                 'metrics': metrics_rf,
+            #                 'r2': metrics_rf['test_r2'],
+            #                 'rmse': metrics_rf['test_rmse'],
+            #                 'mae': metrics_rf['test_mae']
+            #             }
+            #             plt.close()  # Fermer les graphiques matplotlib
+            #         except Exception as e:
+            #             errors['Random Forest'] = str(e)
+                
+            #     # XGBoost
+            #     with st.spinner("🔄 Test XGBoost..."):
+            #         try:
+            #             model_xgb, importance_xgb, r2_xgb = xgboost_simple(
+            #                 df_regression, selected_city, selected_property, selected_transaction
+            #             )
+            #             results['XGBoost'] = {
+            #                 'model': model_xgb,
+            #                 'importance': importance_xgb,
+            #                 'r2': r2_xgb,
+            #                 'rmse': 'N/A',  # XGBoost simple ne retourne que R2
+            #                 'mae': 'N/A'
+            #             }
+            #             plt.close()  # Fermer les graphiques matplotlib
+            #         except Exception as e:
+            #             errors['XGBoost'] = str(e)
+                
+            #     # Afficher les erreurs s'il y en a
+            #     if errors:
+            #         st.warning("⚠️ Certains modèles ont échoué:")
+            #         for model_name, error in errors.items():
+            #             st.error(f"❌ {model_name}: {error}")
+                
+            #     # Afficher la comparaison si on a au moins un résultat
+            #     if results:
+            #         display_model_comparison(results)
+            #     else:
+            #         st.error("❌ Aucun modèle n'a pu être entraîné avec succès.")
         
         except Exception as e:
             st.error(f"❌ Erreur générale lors de l'entraînement: {e}")

@@ -22,6 +22,19 @@ from plotly.subplots import make_subplots
 from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
 from scipy.spatial.distance import pdist
 import matplotlib.pyplot as plt
+from sklearn.ensemble import RandomForestClassifier
+
+
+import xgboost as xgb
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+from sklearn.preprocessing import LabelEncoder
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
 def read_data(file_path):
     df = pd.read_csv('data.csv')
     print(f"Aperçu des données ({df.shape[0]} lignes, {df.shape[1]} colonnes):")
@@ -1290,6 +1303,934 @@ def comparer_modeles(df, city=None, property_type=None, transaction=None, target
     plt.show()
     
     return comparison
+
+
+def create_price_category(df, grouping_columns=['city', 'property_type', 'transaction']):
+    """
+    Crée une colonne 'price_category' basée sur le prix au mètre carré par rapport à la moyenne du marché local.
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        DataFrame avec les données immobilières
+    grouping_columns : list
+        Colonnes pour définir le marché local (par défaut: ville, type de propriété, transaction)
+    
+    Returns:
+    --------
+    df_with_category : pandas.DataFrame
+        DataFrame avec la nouvelle colonne 'price_category'
+    category_stats : pandas.DataFrame
+        Statistiques sur les catégories créées
+    """
+    
+    print("=== CRÉATION DES CATÉGORIES DE PRIX ===")
+    print("=" * 50)
+    
+    # Créer une copie du dataframe
+    df_category = df.copy()
+    
+    # Calculer le prix au mètre carré
+    df_category['price_per_sqm'] = df_category['price'] / df_category['size']
+    
+    # Filtrer les valeurs aberrantes (prix au m² trop élevé ou trop faible)
+    price_per_sqm_median = df_category['price_per_sqm'].median()
+    price_per_sqm_std = df_category['price_per_sqm'].std()
+    
+    # Garder les valeurs dans un intervalle raisonnable (médiane ± 3 écarts-types)
+    lower_bound = price_per_sqm_median - 3 * price_per_sqm_std
+    upper_bound = price_per_sqm_median + 3 * price_per_sqm_std
+    
+    valid_mask = (df_category['price_per_sqm'] >= lower_bound) & (df_category['price_per_sqm'] <= upper_bound)
+    df_category = df_category[valid_mask]
+    
+    print(f"Filtrage des valeurs aberrantes: {len(df) - len(df_category)} lignes supprimées")
+    
+    # Calculer la moyenne du prix au m² par marché local
+    print(f"Calcul des moyennes par marché local (groupement: {', '.join(grouping_columns)})")
+    
+    market_avg_price_per_sqm = df_category.groupby(grouping_columns)['price_per_sqm'].mean().reset_index()
+    market_avg_price_per_sqm.columns = list(grouping_columns) + ['market_avg_price_per_sqm']
+    
+    # Joindre les moyennes au dataframe principal
+    df_category = df_category.merge(market_avg_price_per_sqm, on=grouping_columns, how='left')
+    
+    # Calculer le ratio par rapport à la moyenne du marché
+    df_category['price_ratio'] = df_category['price_per_sqm'] / df_category['market_avg_price_per_sqm']
+    
+    # Créer les catégories basées sur le ratio (CLASSIFICATION BINAIRE)
+    def categorize_price(ratio):
+        if pd.isna(ratio):
+            return 1  # Prix correct par défaut si ratio manquant
+        elif ratio < 0.75 or ratio > 1.25:  # Plus de 25% d'écart (sous ou surestimé)
+            return 0  # Mauvaise estimation
+        else:
+            return 1  # Bonne estimation
+    
+    df_category['price_category'] = df_category['price_ratio'].apply(categorize_price)
+    
+    # Créer un mapping des labels pour l'interprétation
+    category_labels = {0: 'Mal estimé', 1: 'Bien estimé'}
+    df_category['price_category_label'] = df_category['price_category'].map(category_labels)
+    
+    # Calculer les statistiques
+    category_stats = df_category['price_category'].value_counts().sort_index()
+    category_stats_df = pd.DataFrame({
+        'Catégorie': [category_labels[i] for i in category_stats.index],
+        'Code': category_stats.index,
+        'Nombre': category_stats.values,
+        'Pourcentage': (category_stats.values / len(df_category) * 100).round(1)
+    })
+    
+    print(f"\n📊 RÉPARTITION DES CATÉGORIES DE PRIX:")
+    print("-" * 40)
+    print(category_stats_df.to_string(index=False))
+    
+    # Statistiques détaillées par catégorie
+    print(f"\n📈 STATISTIQUES DÉTAILLÉES PAR CATÉGORIE:")
+    print("-" * 45)
+    
+    for cat_code, cat_label in category_labels.items():
+        cat_data = df_category[df_category['price_category'] == cat_code]
+        if len(cat_data) > 0:
+            print(f"\n{cat_label} (Code {cat_code}):")
+            print(f"  • Nombre de biens: {len(cat_data)}")
+            print(f"  • Prix moyen: {cat_data['price'].mean():.0f} TND")
+            print(f"  • Prix/m² moyen: {cat_data['price_per_sqm'].mean():.0f} TND/m²")
+            print(f"  • Ratio moyen: {cat_data['price_ratio'].mean():.2f}")
+            print(f"  • Taille moyenne: {cat_data['size'].mean():.0f} m²")
+            
+            # Top 3 marchés locaux pour cette catégorie
+            top_markets = cat_data.groupby(grouping_columns).size().sort_values(ascending=False).head(3)
+            print(f"  • Top 3 marchés:")
+            for market, count in top_markets.items():
+                if isinstance(market, tuple):
+                    market_str = " - ".join(str(m) for m in market)
+                else:
+                    market_str = str(market)
+                print(f"    - {market_str}: {count} biens")
+    
+    return df_category, category_stats_df
+
+def xgboost_price_classification(df_with_categories, city=None, property_type=None, transaction=None, 
+                                target_column='price_category', test_size=0.2, optimize_params=True):
+    """
+    Applique XGBoost pour la classification des catégories de prix
+    
+    Parameters:
+    -----------
+    df_with_categories : pandas.DataFrame
+        DataFrame avec la colonne price_category
+    city : str, optional
+        Ville à filtrer
+    property_type : str, optional
+        Type de propriété à filtrer
+    transaction : str, optional
+        Type de transaction à filtrer
+    target_column : str
+        Nom de la colonne cible (price_category)
+    test_size : float
+        Taille de l'ensemble de test
+    optimize_params : bool
+        Si True, optimise les hyperparamètres
+    
+    Returns:
+    --------
+    model : XGBClassifier
+        Modèle XGBoost entraîné
+    results : dict
+        Résultats et métriques
+    feature_importance : pandas.DataFrame
+        Importance des caractéristiques
+    """
+    
+    print("=== CLASSIFICATION XGBOOST - CATÉGORIES DE PRIX ===")
+    print("=" * 60)
+    
+    # Filtrer les données selon les paramètres
+    df_filtered = df_with_categories.copy()
+    
+    filter_info = []
+    if city is not None and 'city' in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered['city'] == city]
+        filter_info.append(f"Ville: {city}")
+    
+    if property_type is not None and 'property_type' in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered['property_type'] == property_type]
+        filter_info.append(f"Type: {property_type}")
+    
+    if transaction is not None and 'transaction' in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered['transaction'] == transaction]
+        filter_info.append(f"Transaction: {transaction}")
+    
+    print(f"🎯 FILTRES APPLIQUÉS: {' | '.join(filter_info) if filter_info else 'Aucun filtre'}")
+    print(f"📊 DONNÉES: {len(df_filtered)} observations")
+    
+    # Vérifier la distribution des classes
+    class_distribution = df_filtered[target_column].value_counts().sort_index()
+    print(f"\n📈 DISTRIBUTION DES CLASSES:")
+    for class_code, count in class_distribution.items():
+        class_label = {0: 'Mal estimé', 1: 'Bien estimé'}[class_code]
+        percentage = count / len(df_filtered) * 100
+        print(f"  • {class_label} (code {class_code}): {count} ({percentage:.1f}%)")
+    
+    # Préparer les données pour la classification
+    # Exclure les colonnes non pertinentes pour la prédiction
+    columns_to_exclude = [
+        'price', 'price_per_sqm', 'market_avg_price_per_sqm', 'price_ratio', 
+        'price_category_label', target_column, 'listing_price', 'price_ttc',
+        'source', 'date', 'suffix', 'construction_year'
+    ]
+    
+    # Si on a filtré par ville/type/transaction, exclure ces colonnes aussi
+    if city is not None:
+        columns_to_exclude.append('city')
+    if property_type is not None:
+        columns_to_exclude.append('property_type') 
+    if transaction is not None:
+        columns_to_exclude.append('transaction')
+    
+    # Préparer X et y
+    y = df_filtered[target_column]
+    X = df_filtered.drop(columns=[col for col in columns_to_exclude if col in df_filtered.columns])
+    
+    # Encoder les variables catégorielles restantes
+    categorical_columns = X.select_dtypes(include=['object']).columns
+    label_encoders = {}
+    
+    for col in categorical_columns:
+        le = LabelEncoder()
+        X[col] = le.fit_transform(X[col].astype(str))
+        label_encoders[col] = le
+    
+    # Garder uniquement les colonnes numériques
+    X = X.select_dtypes(include=['number'])
+    
+    print(f"\n🔧 CARACTÉRISTIQUES UTILISÉES: {list(X.columns)}")
+    print(f"📏 DIMENSIONS: {X.shape}")
+    
+    # Diviser en ensembles d'entraînement et de test
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=42, stratify=y
+    )
+    
+    print(f"\n📚 DIVISION DES DONNÉES:")
+    print(f"  • Entraînement: {len(X_train)} observations")
+    print(f"  • Test: {len(X_test)} observations")
+    
+    # Créer et entraîner le modèle XGBoost
+    if optimize_params:
+        print(f"\n⚙️ OPTIMISATION DES HYPERPARAMÈTRES...")
+        
+        # Grille de paramètres pour l'optimisation
+        param_grid = {
+            'n_estimators': [100, 200, 300],
+            'max_depth': [3, 5, 7],
+            'learning_rate': [0.01, 0.1, 0.2],
+            'subsample': [0.8, 1.0],
+            'colsample_bytree': [0.8, 1.0]
+        }
+        
+        # Modèle de base
+        xgb_model = xgb.XGBClassifier(
+            random_state=42,
+            eval_metric='logloss',  # Pour classification binaire
+            verbosity=0
+        )
+        
+        # Recherche sur grille avec validation croisée
+        grid_search = GridSearchCV(
+            xgb_model, param_grid, cv=5, 
+            scoring='accuracy', n_jobs=-1, verbose=1
+        )
+        
+        grid_search.fit(X_train, y_train)
+        model = grid_search.best_estimator_
+        
+        print(f"✅ MEILLEURS PARAMÈTRES: {grid_search.best_params_}")
+        print(f"🎯 SCORE CV: {grid_search.best_score_:.4f}")
+        
+    else:
+        print(f"\n🚀 ENTRAÎNEMENT AVEC PARAMÈTRES PAR DÉFAUT...")
+        
+        model = xgb.XGBClassifier(
+            n_estimators=200,
+            max_depth=5,
+            learning_rate=0.1,
+            random_state=42,
+            eval_metric='logloss',  # Pour classification binaire
+            verbosity=0
+        )
+        
+        model.fit(X_train, y_train)
+    
+    # Prédictions
+    y_train_pred = model.predict(X_train)
+    y_test_pred = model.predict(X_test)
+    y_test_proba = model.predict_proba(X_test)
+    
+    # Calculer les métriques
+    train_accuracy = accuracy_score(y_train, y_train_pred)
+    test_accuracy = accuracy_score(y_test, y_test_pred)
+    
+    print(f"\n📊 RÉSULTATS:")
+    print(f"  • Précision (entraînement): {train_accuracy:.4f}")
+    print(f"  • Précision (test): {test_accuracy:.4f}")
+    
+    # Rapport de classification détaillé
+    print(f"\n📋 RAPPORT DE CLASSIFICATION:")
+    class_names = ['Mal estimé', 'Bien estimé']
+    print(classification_report(y_test, y_test_pred, target_names=class_names))
+    
+    # Matrice de confusion
+    cm = confusion_matrix(y_test, y_test_pred)
+    
+    # Importance des caractéristiques
+    feature_importance = pd.DataFrame({
+        'Caractéristique': X.columns,
+        'Importance': model.feature_importances_
+    }).sort_values('Importance', ascending=False)
+    
+    print(f"\n🏆 TOP 10 CARACTÉRISTIQUES LES PLUS IMPORTANTES:")
+    print(feature_importance.head(10).to_string(index=False))
+    
+    # Préparer les résultats
+    results = {
+        'train_accuracy': train_accuracy,
+        'test_accuracy': test_accuracy,
+        'confusion_matrix': cm,
+        'classification_report': classification_report(y_test, y_test_pred, target_names=class_names, output_dict=True),
+        'y_test': y_test,
+        'y_test_pred': y_test_pred,
+        'y_test_proba': y_test_proba,
+        'feature_names': list(X.columns),
+        'class_names': class_names,
+        'label_encoders': label_encoders,
+        'filters_applied': filter_info
+    }
+    
+    return model, results, feature_importance
+
+def visualize_classification_results(model, results, feature_importance):
+    """
+    Visualise les résultats de la classification
+    """
+    
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=[
+            'Matrice de Confusion',
+            'Importance des Caractéristiques (Top 10)',
+            'Distribution des Prédictions',
+            'Probabilités de Prédiction par Classe'
+        ],
+        specs=[[{'type': 'heatmap'}, {'type': 'bar'}],
+               [{'type': 'bar'}, {'type': 'box'}]]
+    )
+    
+    cm = results['confusion_matrix']
+    class_names = results['class_names']
+    
+    # 1. Matrice de confusion
+    fig.add_trace(
+        go.Heatmap(
+            z=cm,
+            x=class_names,
+            y=class_names,
+            colorscale='Blues',
+            showscale=True,
+            text=cm,
+            texttemplate="%{text}",
+            textfont={"size": 12}
+        ),
+        row=1, col=1
+    )
+    
+    # 2. Importance des caractéristiques (Top 10)
+    top_features = feature_importance.head(10)
+    fig.add_trace(
+        go.Bar(
+            x=top_features['Importance'],
+            y=top_features['Caractéristique'],
+            orientation='h',
+            marker_color='lightblue',
+            showlegend=False
+        ),
+        row=1, col=2
+    )
+    
+    # 3. Distribution des prédictions
+    pred_counts = pd.Series(results['y_test_pred']).value_counts().sort_index()
+    pred_labels = [class_names[i] for i in pred_counts.index]
+    
+    fig.add_trace(
+        go.Bar(
+            x=pred_labels,
+            y=pred_counts.values,
+            marker_color=['red', 'green'],  # Rouge pour mal estimé, vert pour bien estimé
+            showlegend=False
+        ),
+        row=2, col=1
+    )
+    
+    # 4. Distribution des probabilités par classe
+    y_proba = results['y_test_proba']
+    for i, class_name in enumerate(class_names):
+        fig.add_trace(
+            go.Box(
+                y=y_proba[:, i],
+                name=class_name,
+                showlegend=True
+            ),
+            row=2, col=2
+        )
+    
+    # Mise à jour des axes et layout
+    fig.update_xaxes(title_text="Prédiction", row=1, col=1)
+    fig.update_yaxes(title_text="Réalité", row=1, col=1)
+    fig.update_xaxes(title_text="Importance", row=1, col=2)
+    fig.update_xaxes(title_text="Classes", row=2, col=1)
+    fig.update_yaxes(title_text="Nombre", row=2, col=1)
+    fig.update_yaxes(title_text="Probabilité", row=2, col=2)
+    
+    fig.update_layout(
+        height=800,
+        title_text=f"Résultats Classification XGBoost (Précision: {results['test_accuracy']:.3f})",
+        showlegend=True
+    )
+    
+    return fig
+
+def analyze_misclassified_properties(df_with_categories, results, model, feature_importance):
+    """
+    Analyse les propriétés mal classifiées pour comprendre les erreurs du modèle
+    """
+    
+    print("=== ANALYSE DES ERREURS DE CLASSIFICATION ===")
+    print("=" * 50)
+    
+    # Identifier les erreurs
+    y_test = results['y_test']
+    y_pred = results['y_test_pred']
+    
+    # Créer un masque pour les erreurs
+    error_mask = y_test != y_pred
+    error_indices = y_test[error_mask].index
+    
+    # Récupérer les données originales pour les erreurs
+    error_data = df_with_categories.loc[error_indices].copy()
+    error_data['predicted_category'] = y_pred[error_mask]
+    error_data['actual_category'] = y_test[error_mask]
+    
+    class_names = {0: 'Mal estimé', 1: 'Bien estimé'}
+    error_data['predicted_label'] = error_data['predicted_category'].map(class_names)
+    error_data['actual_label'] = error_data['actual_category'].map(class_names)
+    
+    print(f"\n❌ ERREURS DE CLASSIFICATION:")
+    print(f"  • Total d'erreurs: {len(error_data)}")
+    print(f"  • Taux d'erreur: {len(error_data)/len(y_test)*100:.1f}%")
+    
+    # Analyser les types d'erreurs
+    error_types = error_data.groupby(['actual_category', 'predicted_category']).size().reset_index(name='count')
+    error_types['actual_label'] = error_types['actual_category'].map(class_names)
+    error_types['predicted_label'] = error_types['predicted_category'].map(class_names)
+    
+    print(f"\n🔍 TYPES D'ERREURS:")
+    for _, row in error_types.iterrows():
+        print(f"  • {row['actual_label']} → {row['predicted_label']}: {row['count']} cas")
+    
+    # Exemples d'erreurs
+    print(f"\n📋 EXEMPLES D'ERREURS:")
+    for _, error_type in error_types.iterrows():
+        subset = error_data[
+            (error_data['actual_category'] == error_type['actual_category']) & 
+            (error_data['predicted_category'] == error_type['predicted_category'])
+        ]
+        
+        print(f"\n{error_type['actual_label']} → {error_type['predicted_label']} ({error_type['count']} cas):")
+        examples = subset.head(3)
+        for idx, prop in examples.iterrows():
+            print(f"  • Prix: {prop['price']:.0f} TND, Taille: {prop['size']:.0f} m², Ratio: {prop['price_ratio']:.2f}")
+            print(f"    Prix/m²: {prop['price_per_sqm']:.0f} vs Marché: {prop['market_avg_price_per_sqm']:.0f}")
+    
+    # Statistiques spécifiques à la classification binaire
+    print(f"\n📊 ANALYSE DÉTAILLÉE DES ERREURS:")
+    
+    # Faux positifs (prédit bien estimé mais mal estimé en réalité)
+    false_positives = error_data[
+        (error_data['actual_category'] == 0) & (error_data['predicted_category'] == 1)
+    ]
+    if len(false_positives) > 0:
+        print(f"  • Faux positifs: {len(false_positives)} cas")
+        print(f"    Ratio moyen: {false_positives['price_ratio'].mean():.2f}")
+        print(f"    Ces biens semblent correctement estimés au modèle mais sont en réalité mal estimés")
+    
+    # Faux négatifs (prédit mal estimé mais bien estimé en réalité)  
+    false_negatives = error_data[
+        (error_data['actual_category'] == 1) & (error_data['predicted_category'] == 0)
+    ]
+    if len(false_negatives) > 0:
+        print(f"  • Faux négatifs: {len(false_negatives)} cas")
+        print(f"    Ratio moyen: {false_negatives['price_ratio'].mean():.2f}")
+        print(f"    Ces biens semblent mal estimés au modèle mais sont en réalité bien estimés")
+    
+    return error_data, error_types
+
+# Fonction principale pour exécuter toute l'analyse
+def complete_price_classification_analysis(df, city=None, property_type=None, transaction=None):
+    """
+    Analyse complète de classification des prix
+    """
+    
+    print("🏠 === ANALYSE COMPLÈTE DE CLASSIFICATION DES PRIX === 🏠")
+    print("=" * 70)
+    
+    # 1. Créer les catégories de prix
+    print("\n📊 ÉTAPE 1: CRÉATION DES CATÉGORIES DE PRIX")
+    df_with_categories, category_stats = create_price_category(df)
+    
+    # 2. Classification XGBoost
+    print("\n🤖 ÉTAPE 2: CLASSIFICATION AVEC XGBOOST")
+    model, results, feature_importance = xgboost_price_classification(
+        df_with_categories, city=city, property_type=property_type, transaction=transaction
+    )
+    
+    # 3. Visualisation
+    print("\n📈 ÉTAPE 3: VISUALISATION DES RÉSULTATS")
+    fig = visualize_classification_results(model, results, feature_importance)
+    fig.show()
+    
+    # 4. Analyse des erreurs
+    print("\n🔍 ÉTAPE 4: ANALYSE DES ERREURS")
+    error_data, error_types = analyze_misclassified_properties(df_with_categories, results, model, feature_importance)
+    
+    return {
+        'df_with_categories': df_with_categories,
+        'category_stats': category_stats,
+        'model': model,
+        'results': results,
+        'feature_importance': feature_importance,
+        'error_analysis': (error_data, error_types),
+        'visualization': fig
+    }
+
+def random_forest_price_classification(df_with_categories, city=None, property_type=None, transaction=None, 
+                                      target_column='price_category', test_size=0.2, optimize_params=True,
+                                      n_estimators=200, max_depth=10, random_state=42):
+    """
+    Applique Random Forest pour la classification des catégories de prix
+    
+    Parameters:
+    -----------
+    df_with_categories : pandas.DataFrame
+        DataFrame avec la colonne price_category
+    city : str, optional
+        Ville à filtrer
+    property_type : str, optional
+        Type de propriété à filtrer
+    transaction : str, optional
+        Type de transaction à filtrer
+    target_column : str
+        Nom de la colonne cible (price_category)
+    test_size : float
+        Taille de l'ensemble de test
+    optimize_params : bool
+        Si True, optimise les hyperparamètres
+    n_estimators : int
+        Nombre d'arbres (si pas d'optimisation)
+    max_depth : int
+        Profondeur maximale (si pas d'optimisation)
+    random_state : int
+        Graine aléatoire
+    
+    Returns:
+    --------
+    model : RandomForestClassifier
+        Modèle Random Forest entraîné
+    results : dict
+        Résultats et métriques
+    feature_importance : pandas.DataFrame
+        Importance des caractéristiques
+    """
+    
+    print("=== CLASSIFICATION RANDOM FOREST - CATÉGORIES DE PRIX ===")
+    print("=" * 65)
+    
+    # Filtrer les données selon les paramètres
+    df_filtered = df_with_categories.copy()
+    
+    filter_info = []
+    if city is not None and 'city' in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered['city'] == city]
+        filter_info.append(f"Ville: {city}")
+    
+    if property_type is not None and 'property_type' in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered['property_type'] == property_type]
+        filter_info.append(f"Type: {property_type}")
+    
+    if transaction is not None and 'transaction' in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered['transaction'] == transaction]
+        filter_info.append(f"Transaction: {transaction}")
+    
+    print(f"🎯 FILTRES APPLIQUÉS: {' | '.join(filter_info) if filter_info else 'Aucun filtre'}")
+    print(f"📊 DONNÉES: {len(df_filtered)} observations")
+    
+    # Vérifier la distribution des classes
+    class_distribution = df_filtered[target_column].value_counts().sort_index()
+    print(f"\n📈 DISTRIBUTION DES CLASSES:")
+    for class_code, count in class_distribution.items():
+        class_label = {0: 'Mal estimé', 1: 'Bien estimé'}[class_code]
+        percentage = count / len(df_filtered) * 100
+        print(f"  • {class_label} (code {class_code}): {count} ({percentage:.1f}%)")
+    
+    # Préparer les données pour la classification
+    # Exclure les colonnes non pertinentes pour la prédiction
+    columns_to_exclude = [
+        'price', 'price_per_sqm', 'market_avg_price_per_sqm', 'price_ratio', 
+        'price_category_label', target_column, 'listing_price', 'price_ttc',
+        'source', 'date', 'suffix', 'construction_year'
+    ]
+    
+    # Si on a filtré par ville/type/transaction, exclure ces colonnes aussi
+    if city is not None:
+        columns_to_exclude.append('city')
+    if property_type is not None:
+        columns_to_exclude.append('property_type') 
+    if transaction is not None:
+        columns_to_exclude.append('transaction')
+    
+    # Préparer X et y
+    y = df_filtered[target_column]
+    X = df_filtered.drop(columns=[col for col in columns_to_exclude if col in df_filtered.columns])
+    
+    # Encoder les variables catégorielles restantes
+    categorical_columns = X.select_dtypes(include=['object']).columns
+    label_encoders = {}
+    
+    for col in categorical_columns:
+        le = LabelEncoder()
+        X[col] = le.fit_transform(X[col].astype(str))
+        label_encoders[col] = le
+    
+    # Garder uniquement les colonnes numériques
+    X = X.select_dtypes(include=['number'])
+    
+    print(f"\n🔧 CARACTÉRISTIQUES UTILISÉES: {list(X.columns)}")
+    print(f"📏 DIMENSIONS: {X.shape}")
+    
+    # Diviser en ensembles d'entraînement et de test
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=random_state, stratify=y
+    )
+    
+    print(f"\n📚 DIVISION DES DONNÉES:")
+    print(f"  • Entraînement: {len(X_train)} observations")
+    print(f"  • Test: {len(X_test)} observations")
+    
+    # Créer et entraîner le modèle Random Forest
+    if optimize_params:
+        print(f"\n⚙️ OPTIMISATION DES HYPERPARAMÈTRES...")
+        
+        # Grille de paramètres pour l'optimisation
+        param_grid = {
+            'n_estimators': [100, 200, 300],
+            'max_depth': [5, 10, 15, None],
+            'min_samples_split': [2, 5, 10],
+            'min_samples_leaf': [1, 2, 4],
+            'max_features': ['sqrt', 'log2', None]
+        }
+        
+        # Modèle de base
+        
+        rf_model = RandomForestClassifier(
+            random_state=random_state,
+            n_jobs=-1  # Utiliser tous les cœurs
+        )
+        
+        # Recherche sur grille avec validation croisée
+        grid_search = GridSearchCV(
+            rf_model, param_grid, cv=5, 
+            scoring='accuracy', n_jobs=-1, verbose=1
+        )
+        
+        grid_search.fit(X_train, y_train)
+        model = grid_search.best_estimator_
+        
+        print(f"✅ MEILLEURS PARAMÈTRES: {grid_search.best_params_}")
+        print(f"🎯 SCORE CV: {grid_search.best_score_:.4f}")
+        
+    else:
+        print(f"\n🚀 ENTRAÎNEMENT AVEC PARAMÈTRES SPÉCIFIÉS...")
+        
+        model = RandomForestClassifier(
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            random_state=random_state,
+            n_jobs=-1
+        )
+        
+        model.fit(X_train, y_train)
+    
+    # Prédictions
+    y_train_pred = model.predict(X_train)
+    y_test_pred = model.predict(X_test)
+    y_test_proba = model.predict_proba(X_test)
+    
+    # Calculer les métriques
+    train_accuracy = accuracy_score(y_train, y_train_pred)
+    test_accuracy = accuracy_score(y_test, y_test_pred)
+    
+    print(f"\n📊 RÉSULTATS:")
+    print(f"  • Précision (entraînement): {train_accuracy:.4f}")
+    print(f"  • Précision (test): {test_accuracy:.4f}")
+    
+    # Rapport de classification détaillé
+    print(f"\n📋 RAPPORT DE CLASSIFICATION:")
+    class_names = ['Mal estimé', 'Bien estimé']
+    print(classification_report(y_test, y_test_pred, target_names=class_names))
+    
+    # Matrice de confusion
+    cm = confusion_matrix(y_test, y_test_pred)
+    
+    # Importance des caractéristiques
+    feature_importance = pd.DataFrame({
+        'Caractéristique': X.columns,
+        'Importance': model.feature_importances_
+    }).sort_values('Importance', ascending=False)
+    
+    print(f"\n🏆 TOP 10 CARACTÉRISTIQUES LES PLUS IMPORTANTES:")
+    print(feature_importance.head(10).to_string(index=False))
+    
+    # Préparer les résultats
+    results = {
+        'train_accuracy': train_accuracy,
+        'test_accuracy': test_accuracy,
+        'confusion_matrix': cm,
+        'classification_report': classification_report(y_test, y_test_pred, target_names=class_names, output_dict=True),
+        'y_test': y_test,
+        'y_test_pred': y_test_pred,
+        'y_test_proba': y_test_proba,
+        'feature_names': list(X.columns),
+        'class_names': class_names,
+        'label_encoders': label_encoders,
+        'filters_applied': filter_info
+    }
+    
+    return model, results, feature_importance
+
+def analyze_misclassified_properties_rf(df_with_categories, results, model, feature_importance):
+    """
+    Analyse les propriétés mal classifiées pour Random Forest (version corrigée)
+    """
+    
+    print("=== ANALYSE DES ERREURS DE CLASSIFICATION RANDOM FOREST ===")
+    print("=" * 60)
+    
+    # Identifier les erreurs
+    y_test = results['y_test']
+    y_pred = results['y_test_pred']
+    
+    # Créer un masque pour les erreurs
+    error_mask = y_test != y_pred
+    
+    # CORRECTION: Utiliser les indices de y_test pour récupérer les bonnes lignes
+    test_indices = y_test.index  # Indices originaux des données de test
+    error_indices = test_indices[error_mask]  # Indices des erreurs dans le dataset original
+    
+    # Vérifier que les indices existent dans df_with_categories
+    valid_error_indices = [idx for idx in error_indices if idx in df_with_categories.index]
+    
+    if len(valid_error_indices) == 0:
+        print("⚠️ Aucune erreur trouvée avec des indices valides")
+        return pd.DataFrame(), pd.DataFrame()
+    
+    print(f"📊 Indices d'erreurs trouvés: {len(valid_error_indices)} sur {error_mask.sum()}")
+    
+    # Récupérer les données originales pour les erreurs (avec indices valides uniquement)
+    error_data = df_with_categories.loc[valid_error_indices].copy()
+    
+    # Ajouter les prédictions et labels pour les erreurs valides
+    # Il faut faire correspondre les positions dans error_mask avec les indices valides
+    error_positions = []
+    for idx in valid_error_indices:
+        # Trouver la position de cet index dans test_indices
+        pos = list(test_indices).index(idx)
+        error_positions.append(pos)
+    
+    # Récupérer les prédictions correspondantes
+    y_pred_array = y_pred.values if hasattr(y_pred, 'values') else y_pred
+    y_test_array = y_test.values if hasattr(y_test, 'values') else y_test
+    
+    error_data['predicted_category'] = [y_pred_array[pos] for pos in error_positions]
+    error_data['actual_category'] = [y_test_array[pos] for pos in error_positions]
+    
+    class_names = {0: 'Mal estimé', 1: 'Bien estimé'}
+    error_data['predicted_label'] = error_data['predicted_category'].map(class_names)
+    error_data['actual_label'] = error_data['actual_category'].map(class_names)
+    
+    print(f"\n❌ ERREURS DE CLASSIFICATION RANDOM FOREST:")
+    print(f"  • Total d'erreurs: {len(error_data)}")
+    print(f"  • Taux d'erreur: {len(error_data)/len(y_test)*100:.1f}%")
+    
+    # Analyser les types d'erreurs
+    if len(error_data) > 0:
+        error_types = error_data.groupby(['actual_category', 'predicted_category']).size().reset_index(name='count')
+        error_types['actual_label'] = error_types['actual_category'].map(class_names)
+        error_types['predicted_label'] = error_types['predicted_category'].map(class_names)
+        
+        print(f"\n🔍 TYPES D'ERREURS:")
+        for _, row in error_types.iterrows():
+            print(f"  • {row['actual_label']} → {row['predicted_label']}: {row['count']} cas")
+    else:
+        error_types = pd.DataFrame()
+    
+    # Analyse spécifique Random Forest
+    if len(error_data) > 0:
+        print(f"\n🌲 ANALYSE SPÉCIFIQUE RANDOM FOREST:")
+        
+        # Variables les plus importantes dans les erreurs
+        important_features = feature_importance.head(5)['Caractéristique'].tolist()
+        
+        print(f"\n📊 VALEURS DES VARIABLES IMPORTANTES DANS LES ERREURS:")
+        for feature in important_features:
+            if feature in error_data.columns:
+                try:
+                    avg_error = error_data[feature].mean()
+                    # Prendre uniquement les indices qui ne sont pas dans les erreurs
+                    correct_indices = [idx for idx in df_with_categories.index if idx not in valid_error_indices]
+                    avg_correct = df_with_categories.loc[correct_indices, feature].mean()
+                    print(f"  • {feature}: Erreurs={avg_error:.2f}, Correctes={avg_correct:.2f}")
+                except Exception as e:
+                    print(f"  • {feature}: Erreur de calcul - {e}")
+        
+        # Exemples d'erreurs avec probabilités
+        print(f"\n📋 EXEMPLES D'ERREURS AVEC PROBABILITÉS:")
+        
+        # Récupérer les probabilités pour les erreurs
+        y_proba = results['y_test_proba']
+        
+        # S'assurer qu'on a les bonnes probabilités pour les erreurs
+        error_probabilities = []
+        for pos in error_positions:
+            if pos < len(y_proba):
+                error_probabilities.append(y_proba[pos])
+        
+        # Afficher quelques exemples
+        n_examples = min(5, len(error_data), len(error_probabilities))
+        for i in range(n_examples):
+            prop = error_data.iloc[i]
+            prob_mal = error_probabilities[i][0]
+            prob_bien = error_probabilities[i][1]
+            
+            print(f"\nErreur #{i+1}:")
+            print(f"  • Réel: {prop['actual_label']}, Prédit: {prop['predicted_label']}")
+            print(f"  • Probabilités: Mal estimé={prob_mal:.3f}, Bien estimé={prob_bien:.3f}")
+            
+            # Vérifier que les colonnes existent avant de les afficher
+            if 'price' in prop.index:
+                print(f"  • Prix: {prop['price']:.0f} TND", end="")
+            if 'price_ratio' in prop.index:
+                print(f", Ratio: {prop['price_ratio']:.2f}")
+            else:
+                print()
+            
+            # Confiance de la prédiction
+            confidence = max(prob_mal, prob_bien)
+            if confidence < 0.6:
+                print(f"  • ⚠️ Prédiction peu confiante (confiance: {confidence:.3f})")
+            elif confidence > 0.8:
+                print(f"  • ❌ Erreur très confiante (confiance: {confidence:.3f})")
+    
+    return error_data, error_types
+
+def analyze_misclassified_properties_rf_safe(df_with_categories, results, model, feature_importance):
+    """
+    Version sécurisée pour Streamlit - évite les problèmes d'indices
+    """
+    try:
+        # Identifier les erreurs
+        y_test = results['y_test']
+        y_pred = results['y_test_pred']
+        y_proba = results['y_test_proba']
+        
+        # Convertir en arrays numpy pour éviter les problèmes d'indices
+        y_test_values = y_test.values if hasattr(y_test, 'values') else np.array(y_test)
+        y_pred_values = y_pred.values if hasattr(y_pred, 'values') else np.array(y_pred)
+        
+        # Créer un masque pour les erreurs
+        error_mask = y_test_values != y_pred_values
+        
+        if not error_mask.any():
+            # Aucune erreur
+            return pd.DataFrame(), pd.DataFrame()
+        
+        # Créer un DataFrame simple avec les informations d'erreur
+        error_summary = []
+        
+        # Indices des erreurs dans le test set
+        error_positions = np.where(error_mask)[0]
+        
+        class_names = {0: 'Mal estimé', 1: 'Bien estimé'}
+        
+        for i, pos in enumerate(error_positions[:10]):  # Limiter à 10 exemples
+            actual = y_test_values[pos]
+            predicted = y_pred_values[pos]
+            prob_0 = y_proba[pos][0] if len(y_proba) > pos else 0
+            prob_1 = y_proba[pos][1] if len(y_proba) > pos else 0
+            
+            error_summary.append({
+                'position': pos,
+                'actual_category': actual,
+                'predicted_category': predicted,
+                'actual_label': class_names[actual],
+                'predicted_label': class_names[predicted],
+                'prob_mal_estime': prob_0,
+                'prob_bien_estime': prob_1,
+                'confiance': max(prob_0, prob_1)
+            })
+        
+        error_data = pd.DataFrame(error_summary)
+        
+        # Types d'erreurs
+        error_types = error_data.groupby(['actual_category', 'predicted_category']).size().reset_index(name='count')
+        error_types['actual_label'] = error_types['actual_category'].map(class_names)
+        error_types['predicted_label'] = error_types['predicted_category'].map(class_names)
+        
+        return error_data, error_types
+        
+    except Exception as e:
+        print(f"Erreur dans l'analyse des erreurs: {e}")
+        return pd.DataFrame(), pd.DataFrame()
+def complete_random_forest_price_classification_analysis(df, city=None, property_type=None, transaction=None):
+    """
+    Analyse complète de classification des prix avec Random Forest
+    """
+    
+    print("🌲 === ANALYSE COMPLÈTE RANDOM FOREST - CLASSIFICATION DES PRIX === 🌲")
+    print("=" * 80)
+    
+    # 1. Créer les catégories de prix (réutiliser la fonction existante)
+    print("\n📊 ÉTAPE 1: CRÉATION DES CATÉGORIES DE PRIX")
+    df_with_categories, category_stats = create_price_category(df)
+    
+    # 2. Classification Random Forest
+    print("\n🌲 ÉTAPE 2: CLASSIFICATION AVEC RANDOM FOREST")
+    model, results, feature_importance = random_forest_price_classification(
+        df_with_categories, city=city, property_type=property_type, transaction=transaction
+    )
+    
+    # 3. Analyse des erreurs spécifique à Random Forest
+    print("\n🔍 ÉTAPE 3: ANALYSE DES ERREURS RANDOM FOREST")
+    error_data, error_types = analyze_misclassified_properties_rf(df_with_categories, results, model, feature_importance)
+    
+    return {
+        'df_with_categories': df_with_categories,
+        'category_stats': category_stats,
+        'model': model,
+        'results': results,
+        'feature_importance': feature_importance,
+        'error_analysis': (error_data, error_types)
+    }
 
 #SCALING
 def prepare_data_for_clustering(df, features_for_clustering=None):
